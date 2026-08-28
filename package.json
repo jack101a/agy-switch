@@ -38,6 +38,7 @@
   ],
   "scripts": {
     "build": "tsup src/mcp-server.ts src/dashboard-server.ts src/cli.ts src/agy-auth.ts --format esm --out-dir dist --dts --no-splitting",
+    "prepare": "npm run build",
     "dev": "node --watch dist/dashboard-server.js",
     "mcp": "node dist/mcp-server.js",
     "tui": "node dist/agy-auth.js",

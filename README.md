@@ -46,20 +46,23 @@
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Installation & Usage
 
-### Option A: Run directly with npx (Zero install)
+### 1. Install Globally (Direct from GitHub)
 ```bash
-npx agy-switch
+npm install -g jack101a/agy-switch
 ```
-
-### Option B: Install Globally
+Then run anytime:
 ```bash
-npm install -g agy-switch
 agy-switch
 ```
 
-### Option C: From Git Source
+### 2. Run Directly with NPX (Zero install)
+```bash
+npx github:jack101a/agy-switch
+```
+
+### 3. Install from Source
 ```bash
 git clone https://github.com/jack101a/agy-switch.git
 cd agy-switch
