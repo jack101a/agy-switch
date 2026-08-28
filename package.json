@@ -1,0 +1,57 @@
+{
+  "name": "agy-switch",
+  "displayName": "AG Multi-Account Switchboard for Antigravity",
+  "description": "Terminal-first multi-account manager, live AI quota monitor, and MCP server for Google Antigravity.",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jack101a/agy-switch.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "dist/mcp-server.js",
+  "types": "dist/types.d.ts",
+  "bin": {
+    "agy-auth": "./bin/agy-auth.js",
+    "agy-switch": "./bin/agy-auth.js",
+    "ag-switchboard": "./bin/agy-auth.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "antigravity",
+    "ai",
+    "quota",
+    "gemini",
+    "claude",
+    "mcp",
+    "tui",
+    "terminal",
+    "switchboard"
+  ],
+  "scripts": {
+    "build": "tsup src/mcp-server.ts src/dashboard-server.ts src/cli.ts src/agy-auth.ts --format esm --out-dir dist --dts --no-splitting",
+    "dev": "node --watch dist/dashboard-server.js",
+    "mcp": "node dist/mcp-server.js",
+    "tui": "node dist/agy-auth.js",
+    "dashboard": "node dist/dashboard-server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^4.18.2",
+    "open": "^10.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0"
+  }
+}
