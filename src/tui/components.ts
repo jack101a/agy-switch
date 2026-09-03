@@ -53,15 +53,16 @@ export function truncate(str: string, len: number): string {
 }
 
 export function makeProgressBar(pct: number, width: number = 10): string {
-    const clamped = Math.max(0, Math.min(100, pct));
-    const filled = Math.round((clamped / 100) * width);
+    const clampedUsed = Math.max(0, Math.min(100, pct));
+    const available = Math.max(0, Math.min(100, 100 - Math.round(clampedUsed)));
+    const filled = Math.round((available / 100) * width);
     const empty = width - filled;
 
     let color = C.brightGreen;
-    if (clamped >= 80) color = C.brightRed;
-    else if (clamped >= 50) color = C.brightYellow;
+    if (available <= 20) color = C.brightRed;
+    else if (available <= 50) color = C.brightYellow;
 
-    return `${color}${'█'.repeat(filled)}${C.gray}${'░'.repeat(empty)}${C.reset} ${color}${clamped.toString().padStart(3)}%${C.reset}`;
+    return `${color}${'█'.repeat(filled)}${C.gray}${'░'.repeat(empty)}${C.reset} ${color}${available.toString().padStart(3)}%/100%${C.reset}`;
 }
 
 export function formatResetCountdown(iso: string | null, isCompact: boolean = false): string {

@@ -294,9 +294,10 @@ app.get('/', (_req, res) => {
                 
                 const quotaItemsHtml = models.length > 0 ? models.map(m => {
                     const pct = m.usedPercent || 0;
+                    const available = Math.max(0, Math.min(100, 100 - Math.round(pct)));
                     let colorClass = 'fill-green';
-                    if (pct >= 80) colorClass = 'fill-red';
-                    else if (pct >= 50) colorClass = 'fill-yellow';
+                    if (available <= 20) colorClass = 'fill-red';
+                    else if (available <= 50) colorClass = 'fill-yellow';
 
                     const resetInfo = m.resetAt ? 'Resets: ' + new Date(m.resetAt).toLocaleTimeString() : '';
 
@@ -304,10 +305,10 @@ app.get('/', (_req, res) => {
                         <div class="quota-item">
                             <div class="quota-label-row">
                                 <span class="model-name">\${m.displayName}</span>
-                                <span class="quota-meta">\${pct}% used \${resetInfo ? '· ' + resetInfo : ''}</span>
+                                <span class="quota-meta">\${available}%/100% available \${resetInfo ? '· ' + resetInfo : ''}</span>
                             </div>
                             <div class="progress-bar-bg">
-                                <div class="progress-bar-fill \${colorClass}" style="width: \${Math.min(100, pct)}%"></div>
+                                <div class="progress-bar-fill \${colorClass}" style="width: \${available}%"></div>
                             </div>
                         </div>
                     \`;

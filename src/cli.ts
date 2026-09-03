@@ -21,17 +21,18 @@ const c = {
 };
 
 function progressBar(pct: number, width: number = 16): string {
-    const clamped = Math.max(0, Math.min(100, pct));
-    const filledCount = Math.round((clamped / 100) * width);
+    const clampedUsed = Math.max(0, Math.min(100, pct));
+    const available = Math.max(0, Math.min(100, 100 - Math.round(clampedUsed)));
+    const filledCount = Math.round((available / 100) * width);
     const emptyCount = width - filledCount;
 
     let color = c.green;
-    if (clamped >= 80) color = c.red;
-    else if (clamped >= 50) color = c.yellow;
+    if (available <= 20) color = c.red;
+    else if (available <= 50) color = c.yellow;
 
     const filled = '█'.repeat(filledCount);
     const empty = '░'.repeat(emptyCount);
-    return `${color}${filled}${c.dim}${empty}${c.reset} ${color}${clamped.toString().padStart(3)}%${c.reset}`;
+    return `${color}${filled}${c.dim}${empty}${c.reset} ${color}${available.toString().padStart(3)}%/100%${c.reset}`;
 }
 
 const authService = new GoogleAuthService();

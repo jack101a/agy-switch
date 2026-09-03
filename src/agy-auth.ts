@@ -121,7 +121,7 @@ async function runCliQuota(query?: string) {
                 }
             } else {
                 console.log(`${C.gray}${'─'.repeat(width)}${C.reset}`);
-                console.log(`${C.bold}${'Model'.padEnd(28)} ${'Usage'.padEnd(20)} Reset Date & Time${C.reset}`);
+                console.log(`${C.bold}${'Model'.padEnd(28)} ${'Available Quota'.padEnd(23)} Reset Date & Time${C.reset}`);
                 console.log(`${C.gray}${'─'.repeat(width)}${C.reset}`);
 
                 for (const m of q.models) {
