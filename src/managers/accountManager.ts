@@ -6,6 +6,7 @@ import {
   ACCOUNTS_FILE,
   ACTIVE_ACCOUNT_FILE,
   TOKEN_REFRESH_BUFFER_SECS,
+  OAUTH_SCOPES,
 } from '../constants.js';
 import type { GoogleAuthService } from '../services/googleAuth.js';
 import type { QuotaApiService } from '../services/quotaApi.js';
@@ -102,8 +103,7 @@ export class AccountManager {
       const credsPayload = {
         access_token: account.accessToken,
         refresh_token: account.refreshToken,
-        scope:
-          'https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cloud-platform openid',
+        scope: OAUTH_SCOPES.join(' '),
         token_type: 'Bearer',
         expiry_date: account.expiryTimestamp * 1000,
       };
