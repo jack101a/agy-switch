@@ -84,7 +84,8 @@ export class TUIEngine {
             const clock = `${C.dim}${timeStr}${C.reset}`;
             add(`${C.gray}│${C.reset}${padRight(headerTitle, width - 12)}${clock} ${C.gray}│${C.reset}`);
             add(`${C.gray}├${'─'.repeat(width - 2)}┤${C.reset}`);
-            const statusRow = ` ${this.statusMessage || `${C.gray}Select account to activate • Press [a] to add, [d] to remove${C.reset}`}`;
+            const cleanStatus = this.statusMessage ? this.statusMessage.replace(/[\r\n]+/g, ' ') : '';
+            const statusRow = ` ${cleanStatus || `${C.gray}Select account to activate • Press [a] to add, [d] to remove${C.reset}`}`;
             add(`${C.gray}│${C.reset}${padRight(statusRow, width - 2)}${C.gray}│${C.reset}`);
             add(`${C.gray}╰${'─'.repeat(width - 2)}╯${C.reset}`);
         }
@@ -242,23 +243,32 @@ export class TUIEngine {
                 const raw = input.trim();
                 if (!raw) {
                     this.statusMessage = `${C.yellow}Cancelled account addition.${C.reset}`;
-                } else {
-                    try {
-                        console.log(`\nConnecting account...`);
-                        const res = await this.authService.completeOAuthWithCode(raw, session.state);
-                        const acc = await this.accountManager.addAccountWithTokens(
-                            { accessToken: res.accessToken, refreshToken: res.refreshToken, expiryTimestamp: res.expiryTimestamp },
-                            { email: res.email, name: res.name }
-                        );
-                        this.selectedIndex = Math.max(0, this.accountManager.getAccounts().length - 1);
-                        this.activeId = acc.id;
-                        this.statusMessage = `${C.brightGreen}✔ Connected & Activated: ${acc.name}${C.reset}`;
-                    } catch (e: any) {
-                        this.statusMessage = `${C.red}❌ Connection failed: ${e.message}${C.reset}`;
-                    }
+                    finishPrompt();
+                    resolve();
+                    return;
                 }
-                finishPrompt();
-                resolve();
+
+                try {
+                    console.log(`\nConnecting account...`);
+                    const res = await this.authService.completeOAuthWithCode(raw, session.state);
+                    const acc = await this.accountManager.addAccountWithTokens(
+                        { accessToken: res.accessToken, refreshToken: res.refreshToken, expiryTimestamp: res.expiryTimestamp },
+                        { email: res.email, name: res.name }
+                    );
+                    this.selectedIndex = Math.max(0, this.accountManager.getAccounts().length - 1);
+                    this.activeId = acc.id;
+                    this.statusMessage = `${C.brightGreen}✔ Connected & Activated: ${acc.name}${C.reset}`;
+                    finishPrompt();
+                    resolve();
+                } catch (e: any) {
+                    const cleanErr = (e.message || String(e)).replace(/[\r\n]+/g, ' ');
+                    this.statusMessage = `${C.red}❌ Connection failed: ${cleanErr}${C.reset}`;
+                    console.log(`\n${C.red}❌ Connection failed: ${cleanErr}${C.reset}\n`);
+                    rl.question(`${C.dim}Press Enter to return to dashboard...${C.reset}`, () => {
+                        finishPrompt();
+                        resolve();
+                    });
+                }
             });
         });
     }
@@ -365,10 +375,14 @@ export class TUIEngine {
 
             // Background live quota sync
             this.accountManager.refreshAllQuotas().then(() => {
-                this.statusMessage = `${C.brightGreen}✔ Quotas up to date (${new Date().toLocaleTimeString()})${C.reset}`;
+                if (!this.statusMessage.includes('❌')) {
+                    this.statusMessage = `${C.brightGreen}✔ Quotas up to date (${new Date().toLocaleTimeString()})${C.reset}`;
+                }
                 if (this.isRunning && !this.isPrompting) this.renderFrame();
             }).catch(() => {
-                this.statusMessage = `${C.yellow}Could not refresh cloud quotas${C.reset}`;
+                if (!this.statusMessage.includes('❌')) {
+                    this.statusMessage = `${C.yellow}Could not refresh cloud quotas${C.reset}`;
+                }
                 if (this.isRunning && !this.isPrompting) this.renderFrame();
             });
 

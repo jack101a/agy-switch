@@ -103,7 +103,7 @@ export class GoogleAuthService {
         rawInput: string,
         state?: string
     ): Promise<OAuthResult> {
-        let code = rawInput.trim();
+        let code = rawInput.trim().replace(/^["'`]|["'`]$/g, '');
         let redirectUri = `http://localhost:${OAUTH_CALLBACK_PORT}/callback`;
 
         // If the user pasted the entire callback URL e.g. http://localhost:42001/callback?code=...
@@ -115,7 +115,8 @@ export class GoogleAuthService {
                 if (extractedCode) {
                     code = extractedCode;
                 }
-                if (extractedState && !state) {
+                // Prioritize state extracted from the actual callback URL
+                if (extractedState) {
                     state = extractedState;
                 }
             } catch {
@@ -124,8 +125,13 @@ export class GoogleAuthService {
                 if (match && match[1]) {
                     code = decodeURIComponent(match[1]);
                 }
+                const stateMatch = code.match(/state=([^&]+)/);
+                if (stateMatch && stateMatch[1]) {
+                    state = decodeURIComponent(stateMatch[1]);
+                }
             }
         }
+        code = code.trim().replace(/^["'`]|["'`]$/g, '');
 
         const session = this.getPendingSession(state);
         const codeVerifier = session?.codeVerifier;
