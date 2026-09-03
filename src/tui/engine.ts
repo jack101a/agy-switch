@@ -22,6 +22,7 @@ interface CardClickRegion {
 
 export class TUIEngine {
     private isRunning = false;
+    private isPrompting = false;
     private selectedIndex = 0;
     private activeId: string | null = null;
     private statusMessage = '';
@@ -201,6 +202,7 @@ export class TUIEngine {
     }
 
     private async promptAddAccount(): Promise<void> {
+        this.isPrompting = true;
         this.disableMouse();
         if (process.stdin.isTTY) process.stdin.setRawMode(false);
         this.showCursor();
@@ -216,9 +218,27 @@ export class TUIEngine {
 
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
+        const finishPrompt = () => {
+            rl.close();
+            this.isPrompting = false;
+            this.clearScreen();
+            this.hideCursor();
+            this.enableMouse();
+            if (process.stdin.isTTY) {
+                process.stdin.setRawMode(true);
+                process.stdin.resume();
+            }
+            this.renderFrame();
+        };
+
         return new Promise<void>((resolve) => {
+            rl.on('SIGINT', () => {
+                this.statusMessage = `${C.yellow}Cancelled account addition.${C.reset}`;
+                finishPrompt();
+                resolve();
+            });
+
             rl.question(`${C.bold}Paste redirect URL or code (or Enter to cancel): ${C.reset}`, async (input) => {
-                rl.close();
                 const raw = input.trim();
                 if (!raw) {
                     this.statusMessage = `${C.yellow}Cancelled account addition.${C.reset}`;
@@ -237,14 +257,7 @@ export class TUIEngine {
                         this.statusMessage = `${C.red}❌ Connection failed: ${e.message}${C.reset}`;
                     }
                 }
-                this.clearScreen();
-                this.hideCursor();
-                this.enableMouse();
-                if (process.stdin.isTTY) {
-                    process.stdin.setRawMode(true);
-                    process.stdin.resume();
-                }
-                this.renderFrame();
+                finishPrompt();
                 resolve();
             });
         });
@@ -255,6 +268,7 @@ export class TUIEngine {
         const target = accounts[this.selectedIndex];
         if (!target) return;
 
+        this.isPrompting = true;
         this.disableMouse();
         if (process.stdin.isTTY) process.stdin.setRawMode(false);
         this.showCursor();
@@ -266,9 +280,27 @@ export class TUIEngine {
 
         const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
+        const finishPrompt = () => {
+            rl.close();
+            this.isPrompting = false;
+            this.clearScreen();
+            this.hideCursor();
+            this.enableMouse();
+            if (process.stdin.isTTY) {
+                process.stdin.setRawMode(true);
+                process.stdin.resume();
+            }
+            this.renderFrame();
+        };
+
         return new Promise<void>((resolve) => {
+            rl.on('SIGINT', () => {
+                this.statusMessage = `${C.yellow}Cancelled removal.${C.reset}`;
+                finishPrompt();
+                resolve();
+            });
+
             rl.question(`${C.bold}Type 'y' to confirm, or Enter to cancel: ${C.reset}`, async (ans) => {
-                rl.close();
                 if (ans.trim().toLowerCase() === 'y') {
                     await this.accountManager.removeAccount(target.id);
                     const remaining = this.accountManager.getAccounts();
@@ -279,14 +311,7 @@ export class TUIEngine {
                 } else {
                     this.statusMessage = `${C.yellow}Cancelled removal.${C.reset}`;
                 }
-                this.clearScreen();
-                this.hideCursor();
-                this.enableMouse();
-                if (process.stdin.isTTY) {
-                    process.stdin.setRawMode(true);
-                    process.stdin.resume();
-                }
-                this.renderFrame();
+                finishPrompt();
                 resolve();
             });
         });
@@ -341,15 +366,15 @@ export class TUIEngine {
             // Background live quota sync
             this.accountManager.refreshAllQuotas().then(() => {
                 this.statusMessage = `${C.brightGreen}✔ Quotas up to date (${new Date().toLocaleTimeString()})${C.reset}`;
-                if (this.isRunning) this.renderFrame();
+                if (this.isRunning && !this.isPrompting) this.renderFrame();
             }).catch(() => {
                 this.statusMessage = `${C.yellow}Could not refresh cloud quotas${C.reset}`;
-                if (this.isRunning) this.renderFrame();
+                if (this.isRunning && !this.isPrompting) this.renderFrame();
             });
 
             // Resize handler (SIGWINCH)
             const onResize = () => {
-                if (this.isRunning) {
+                if (this.isRunning && !this.isPrompting) {
                     this.clearScreen();
                     this.renderFrame();
                 }
@@ -364,6 +389,7 @@ export class TUIEngine {
             }
 
             process.stdin.on('data', async (chunk) => {
+                if (!this.isRunning || this.isPrompting) return;
                 try {
                     const str = chunk.toString();
 
@@ -387,12 +413,12 @@ export class TUIEngine {
                     }
                 } catch (e: any) {
                     this.statusMessage = `${C.red}Error: ${e.message}${C.reset}`;
-                    if (this.isRunning) this.renderFrame();
+                    if (this.isRunning && !this.isPrompting) this.renderFrame();
                 }
             });
 
             process.stdin.on('keypress', async (str, key) => {
-                if (!this.isRunning) return;
+                if (!this.isRunning || this.isPrompting) return;
 
                 // Ignore mouse escape sequences leaking into keypress
                 if (key?.sequence?.startsWith('\x1b[<') || key?.sequence?.startsWith('\x1b[M')) {
