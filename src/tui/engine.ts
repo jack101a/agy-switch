@@ -240,7 +240,10 @@ export class TUIEngine {
                 this.clearScreen();
                 this.hideCursor();
                 this.enableMouse();
-                if (process.stdin.isTTY) process.stdin.setRawMode(true);
+                if (process.stdin.isTTY) {
+                    process.stdin.setRawMode(true);
+                    process.stdin.resume();
+                }
                 this.renderFrame();
                 resolve();
             });
@@ -279,7 +282,10 @@ export class TUIEngine {
                 this.clearScreen();
                 this.hideCursor();
                 this.enableMouse();
-                if (process.stdin.isTTY) process.stdin.setRawMode(true);
+                if (process.stdin.isTTY) {
+                    process.stdin.setRawMode(true);
+                    process.stdin.resume();
+                }
                 this.renderFrame();
                 resolve();
             });
@@ -306,136 +312,160 @@ export class TUIEngine {
             } catch {}
         };
 
-        process.on('exit', restoreTerminal);
-        process.on('uncaughtException', (err) => {
-            restoreTerminal();
-            console.error(err);
-            process.exit(1);
-        });
+        return new Promise<void>((resolve) => {
+            const stopAndExit = () => {
+                this.isRunning = false;
+                process.stdout.removeListener('resize', onResize);
+                restoreTerminal();
+                console.log('');
+                resolve();
+                process.exit(0);
+            };
 
-        this.clearScreen();
-        this.hideCursor();
-        this.enableMouse();
-        this.statusMessage = `${C.gray}Fetching latest quotas from cloud...${C.reset}`;
-        this.renderFrame();
+            process.on('exit', restoreTerminal);
+            process.on('uncaughtException', (err) => {
+                restoreTerminal();
+                console.error(err);
+                process.exit(1);
+            });
+            process.on('unhandledRejection', (err) => {
+                console.error('Unhandled rejection:', err);
+            });
 
-        // Background live quota sync
-        this.accountManager.refreshAllQuotas().then(() => {
-            this.statusMessage = `${C.brightGreen}✔ Quotas up to date (${new Date().toLocaleTimeString()})${C.reset}`;
-            if (this.isRunning) this.renderFrame();
-        }).catch(() => {
-            this.statusMessage = `${C.yellow}Could not refresh cloud quotas${C.reset}`;
-            if (this.isRunning) this.renderFrame();
-        });
-
-        // Resize handler (SIGWINCH)
-        const onResize = () => {
-            if (this.isRunning) {
-                this.clearScreen();
-                this.renderFrame();
-            }
-        };
-        process.stdout.on('resize', onResize);
-
-        // Input setup
-        readline.emitKeypressEvents(process.stdin);
-        if (process.stdin.isTTY) process.stdin.setRawMode(true);
-
-        const stopAndExit = () => {
-            this.isRunning = false;
-            process.stdout.removeListener('resize', onResize);
-            restoreTerminal();
-            console.log('');
-            process.exit(0);
-        };
-
-        process.stdin.on('data', async (chunk) => {
-            const str = chunk.toString();
-
-            // SGR Mouse Click Event: \x1b[<0;x;yM
-            const mouseMatch = str.match(/\x1b\[<0;(\d+);(\d+)M/);
-            if (mouseMatch) {
-                const clickY = parseInt(mouseMatch[2], 10);
-                const hit = this.clickRegions.find((r) => clickY >= r.startRow && clickY <= r.endRow);
-                if (hit !== undefined) {
-                    this.selectedIndex = hit.accountIndex;
-                    const accs = this.accountManager.getAccounts();
-                    const chosen = accs[this.selectedIndex];
-                    if (chosen) {
-                        await this.accountManager.setActiveAccount(chosen.id);
-                        this.activeId = chosen.id;
-                        this.statusMessage = `${C.bgGreen}${C.bold}${C.white} ✔ ACTIVATED: ${chosen.name} (${chosen.email}) ${C.reset}`;
-                        this.renderFrame();
-                    }
-                    return;
-                }
-            }
-        });
-
-        process.stdin.on('keypress', async (str, key) => {
-            if (!this.isRunning) return;
-
-            const accs = this.accountManager.getAccounts();
-
-            // Direct numeric quick-switch [1-9]
-            if (str && str >= '1' && str <= '9') {
-                const num = parseInt(str, 10);
-                if (num <= accs.length) {
-                    this.selectedIndex = num - 1;
-                    const chosen = accs[this.selectedIndex];
-                    await this.accountManager.setActiveAccount(chosen.id);
-                    this.activeId = chosen.id;
-                    this.statusMessage = `${C.bgGreen}${C.bold}${C.white} ✔ ACTIVATED: ${chosen.name} (${chosen.email}) ${C.reset}`;
-                    this.renderFrame();
-                    return;
-                }
-            }
-
-            if (key?.name === 'up' || key?.name === 'k') {
-                this.selectedIndex = (this.selectedIndex - 1 + accs.length) % accs.length;
-            } else if (key?.name === 'down' || key?.name === 'j') {
-                this.selectedIndex = (this.selectedIndex + 1) % accs.length;
-            } else if (key?.name === 'return' || key?.name === 'space') {
-                const chosen = accs[this.selectedIndex];
-                if (chosen) {
-                    await this.accountManager.setActiveAccount(chosen.id);
-                    this.activeId = chosen.id;
-                    this.statusMessage = `${C.bgGreen}${C.bold}${C.white} ✔ ACTIVATED: ${chosen.name} (${chosen.email}) ${C.reset}`;
-                }
-            } else if (str === 'a' || str === 'A') {
-                await this.promptAddAccount();
-                return;
-            } else if (str === 'd' || str === 'D' || str === 'x' || str === 'X') {
-                await this.promptRemoveAccount();
-                return;
-            } else if (str === 'r' || str === 'R') {
-                this.statusMessage = `${C.brightYellow}🔄 Refreshing quotas from Google Cloud...${C.reset}`;
-                this.renderFrame();
-
-                this.accountManager.refreshAllQuotas().then(() => {
-                    this.statusMessage = `${C.brightGreen}✔ Refreshed at ${new Date().toLocaleTimeString()}${C.reset}`;
-                    if (this.isRunning) this.renderFrame();
-                }).catch(() => {
-                    this.statusMessage = `${C.red}❌ Refresh failed${C.reset}`;
-                    if (this.isRunning) this.renderFrame();
-                });
-                return;
-            } else if (str === 'w' || str === 'W') {
-                this.statusMessage = `${C.brightCyan}Web dashboard running on http://0.0.0.0:${DASHBOARD_PORT}${C.reset}`;
-                const { spawn } = await import('child_process');
-                const child = spawn('node', [
-                    new URL('../dashboard-server.js', import.meta.url).pathname
-                ], { detached: true, stdio: 'ignore' });
-                child.unref();
-            } else if (str === 'q' || str === 'Q' || key?.name === 'escape' || (key?.ctrl && str === 'c')) {
-                stopAndExit();
-                return;
-            }
-
+            this.clearScreen();
+            this.hideCursor();
+            this.enableMouse();
+            this.statusMessage = `${C.gray}Fetching latest quotas from cloud...${C.reset}`;
             this.renderFrame();
-        });
 
-        process.on('SIGINT', stopAndExit);
-        process.on('SIGTERM', stopAndExit);
+            // Background live quota sync
+            this.accountManager.refreshAllQuotas().then(() => {
+                this.statusMessage = `${C.brightGreen}✔ Quotas up to date (${new Date().toLocaleTimeString()})${C.reset}`;
+                if (this.isRunning) this.renderFrame();
+            }).catch(() => {
+                this.statusMessage = `${C.yellow}Could not refresh cloud quotas${C.reset}`;
+                if (this.isRunning) this.renderFrame();
+            });
+
+            // Resize handler (SIGWINCH)
+            const onResize = () => {
+                if (this.isRunning) {
+                    this.clearScreen();
+                    this.renderFrame();
+                }
+            };
+            process.stdout.on('resize', onResize);
+
+            // Input setup
+            readline.emitKeypressEvents(process.stdin);
+            if (process.stdin.isTTY) {
+                process.stdin.setRawMode(true);
+                process.stdin.resume();
+            }
+
+            process.stdin.on('data', async (chunk) => {
+                try {
+                    const str = chunk.toString();
+
+                    // SGR Mouse Click Event: \x1b[<0;x;yM
+                    const mouseMatch = str.match(/\x1b\[<0;(\d+);(\d+)M/);
+                    if (mouseMatch) {
+                        const clickY = parseInt(mouseMatch[2], 10);
+                        const hit = this.clickRegions.find((r) => clickY >= r.startRow && clickY <= r.endRow);
+                        if (hit !== undefined) {
+                            this.selectedIndex = hit.accountIndex;
+                            const accs = this.accountManager.getAccounts();
+                            const chosen = accs[this.selectedIndex];
+                            if (chosen) {
+                                await this.accountManager.setActiveAccount(chosen.id);
+                                this.activeId = chosen.id;
+                                this.statusMessage = `${C.bgGreen}${C.bold}${C.white} ✔ ACTIVATED: ${chosen.name} (${chosen.email}) ${C.reset}`;
+                                this.renderFrame();
+                            }
+                            return;
+                        }
+                    }
+                } catch (e: any) {
+                    this.statusMessage = `${C.red}Error: ${e.message}${C.reset}`;
+                    if (this.isRunning) this.renderFrame();
+                }
+            });
+
+            process.stdin.on('keypress', async (str, key) => {
+                if (!this.isRunning) return;
+
+                // Ignore mouse escape sequences leaking into keypress
+                if (key?.sequence?.startsWith('\x1b[<') || key?.sequence?.startsWith('\x1b[M')) {
+                    return;
+                }
+
+                try {
+                    const accs = this.accountManager.getAccounts();
+
+                    // Direct numeric quick-switch [1-9]
+                    if (str && str >= '1' && str <= '9') {
+                        const num = parseInt(str, 10);
+                        if (num <= accs.length) {
+                            this.selectedIndex = num - 1;
+                            const chosen = accs[this.selectedIndex];
+                            await this.accountManager.setActiveAccount(chosen.id);
+                            this.activeId = chosen.id;
+                            this.statusMessage = `${C.bgGreen}${C.bold}${C.white} ✔ ACTIVATED: ${chosen.name} (${chosen.email}) ${C.reset}`;
+                            this.renderFrame();
+                            return;
+                        }
+                    }
+
+                    if (key?.name === 'up' || key?.name === 'k') {
+                        this.selectedIndex = (this.selectedIndex - 1 + accs.length) % accs.length;
+                    } else if (key?.name === 'down' || key?.name === 'j') {
+                        this.selectedIndex = (this.selectedIndex + 1) % accs.length;
+                    } else if (key?.name === 'return' || key?.name === 'space') {
+                        const chosen = accs[this.selectedIndex];
+                        if (chosen) {
+                            await this.accountManager.setActiveAccount(chosen.id);
+                            this.activeId = chosen.id;
+                            this.statusMessage = `${C.bgGreen}${C.bold}${C.white} ✔ ACTIVATED: ${chosen.name} (${chosen.email}) ${C.reset}`;
+                        }
+                    } else if (str === 'a' || str === 'A') {
+                        await this.promptAddAccount();
+                        return;
+                    } else if (str === 'd' || str === 'D' || str === 'x' || str === 'X') {
+                        await this.promptRemoveAccount();
+                        return;
+                    } else if (str === 'r' || str === 'R') {
+                        this.statusMessage = `${C.brightYellow}🔄 Refreshing quotas from Google Cloud...${C.reset}`;
+                        this.renderFrame();
+
+                        this.accountManager.refreshAllQuotas().then(() => {
+                            this.statusMessage = `${C.brightGreen}✔ Refreshed at ${new Date().toLocaleTimeString()}${C.reset}`;
+                            if (this.isRunning) this.renderFrame();
+                        }).catch(() => {
+                            this.statusMessage = `${C.red}❌ Refresh failed${C.reset}`;
+                            if (this.isRunning) this.renderFrame();
+                        });
+                        return;
+                    } else if (str === 'w' || str === 'W') {
+                        this.statusMessage = `${C.brightCyan}Web dashboard running on http://0.0.0.0:${DASHBOARD_PORT}${C.reset}`;
+                        const { spawn } = await import('child_process');
+                        const child = spawn('node', [
+                            new URL('../dashboard-server.js', import.meta.url).pathname
+                        ], { detached: true, stdio: 'ignore' });
+                        child.unref();
+                    } else if (str === 'q' || str === 'Q' || (key?.ctrl && (str === 'c' || key?.name === 'c'))) {
+                        stopAndExit();
+                        return;
+                    }
+
+                    this.renderFrame();
+                } catch (err: any) {
+                    this.statusMessage = `${C.red}Error: ${err.message}${C.reset}`;
+                    if (this.isRunning) this.renderFrame();
+                }
+            });
+
+            process.on('SIGINT', stopAndExit);
+            process.on('SIGTERM', stopAndExit);
+        });
     }
 }
