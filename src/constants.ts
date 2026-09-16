@@ -29,6 +29,11 @@ export const QUOTA_API_ENDPOINTS = [
     'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
 ];
 
+export const QUOTA_SUMMARY_API_ENDPOINTS = [
+    'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+    'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+];
+
 export const LOAD_CODE_ASSIST_ENDPOINTS = [
     'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
     'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',

@@ -106,7 +106,9 @@ export class TUIEngine {
             const tier = quota?.tierName || 'Standard';
             const models = getTopModels(quota, isMobile ? 2 : 3);
             const quickKey = idx < 9 ? `${idx + 1}` : '';
-            const hourlyPct = quota?.geminiHourlyPercent ?? 100;
+            const hourlyPct = quota?.geminiHourlyPercent ?? acc.hourlyPercent ?? 100;
+            const hourlyReset = quota?.geminiHourlyReset;
+            const weeklyPct = quota?.weeklyPercent ?? acc.weeklyPercent ?? 100;
             const weeklyIso = this.accountManager.getEffectiveWeeklyExpiryForAccount(acc);
 
             if (isMobile) {
@@ -132,8 +134,12 @@ export class TUIEngine {
                     add(`  ${C.inverse}${C.bold}${C.brightCyan} [ Press ${quickKey ? quickKey + ' or ' : ''}ENTER to Activate ] ${C.reset}`);
                 }
 
-                const weeklyStrMobile = weeklyIso ? formatResetCountdown(weeklyIso, true) : `${C.gray}N/A${C.reset}`;
-                add(`  ${C.bold}Gemini Hourly:${C.reset} ${hourlyPct}%  ${C.gray}│${C.reset}  ${C.bold}Weekly:${C.reset} ${weeklyStrMobile}`);
+                const hourlyResetStrMobile = hourlyReset ? formatResetCountdown(hourlyReset, true) : `${C.gray}active${C.reset}`;
+                const weeklyResetStrMobile = weeklyIso ? formatResetCountdown(weeklyIso, true) : `${C.gray}N/A${C.reset}`;
+                const mobileHBar = makeProgressBar(100 - hourlyPct, Math.max(5, Math.floor(width * 0.15)));
+                const mobileWBar = makeProgressBar(100 - weeklyPct, Math.max(5, Math.floor(width * 0.15)));
+                add(`  ${C.bold}Gemini 5-Hour:${C.reset} ${mobileHBar} ${C.gray}↳ ${hourlyResetStrMobile}${C.reset}`);
+                add(`  ${C.bold}Gemini Weekly:${C.reset} ${mobileWBar} ${C.gray}↳ ${weeklyResetStrMobile}${C.reset}`);
                 add(`  ${C.gray}┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${C.reset}`);
 
                 if (models.length > 0) {
@@ -170,12 +176,17 @@ export class TUIEngine {
 
                 add(`${cardColor}│${C.reset}${padRight(topBanner, width - 2)}${cardColor}│${C.reset}`);
 
-                const barWidth = width >= 86 ? 10 : 8;
+                const barWidth = width >= 90 ? 10 : 7;
                 const hourlyBar = makeProgressBar(100 - hourlyPct, barWidth);
-                const weeklyStrDesktop = weeklyIso ? formatResetCountdown(weeklyIso, false) : `${C.gray}N/A${C.reset}`;
-                const weeklyLabel = width >= 86 ? 'Weekly Expiry:' : 'Weekly:';
-                const summaryRow = `   ${C.bold}Gemini Hourly:${C.reset} ${hourlyBar}  ${C.gray}│${C.reset}  ${C.bold}${weeklyLabel}${C.reset} ${weeklyStrDesktop}`;
-                add(`${cardColor}│${C.reset}${padRight(summaryRow, width - 2)}${cardColor}│${C.reset}`);
+                const weeklyBar = makeProgressBar(100 - weeklyPct, barWidth);
+                const isCompactDates = width < 98;
+                const hourlyResetStr = hourlyReset ? formatResetCountdown(hourlyReset, isCompactDates) : `${C.gray}active${C.reset}`;
+                const weeklyResetStr = weeklyIso ? formatResetCountdown(weeklyIso, isCompactDates) : `${C.gray}N/A${C.reset}`;
+
+                const summaryRow1 = `   ${C.bold}Gemini 5-Hour:${C.reset}  ${hourlyBar}   ${C.gray}Resets: ${hourlyResetStr}${C.reset}`;
+                const summaryRow2 = `   ${C.bold}Gemini Weekly:${C.reset}  ${weeklyBar}   ${C.gray}Resets: ${weeklyResetStr}${C.reset}`;
+                add(`${cardColor}│${C.reset}${padRight(summaryRow1, width - 2)}${cardColor}│${C.reset}`);
+                add(`${cardColor}│${C.reset}${padRight(summaryRow2, width - 2)}${cardColor}│${C.reset}`);
                 add(`${cardColor}├${'┄'.repeat(width - 2)}┤${C.reset}`);
 
                 if (models.length > 0) {

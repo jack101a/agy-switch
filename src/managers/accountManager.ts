@@ -218,8 +218,9 @@ export class AccountManager {
 
   getEffectiveWeeklyExpiryForAccount(account: StoredAccount): string | null {
     const cachedQuota = this.quotaCache.get(account.id)?.quota;
-    const explicit = cachedQuota?.weeklyExpiry || account.weeklyExpiry;
-    return getEffectiveWeeklyExpiry(explicit, account.addedAt);
+    const liveExpiry = cachedQuota?.weeklyExpiry;
+    if (liveExpiry) return liveExpiry;
+    return getEffectiveWeeklyExpiry(account.weeklyExpiry, account.addedAt);
   }
 
   async setWeeklyExpiry(id: string, dateIso: string | null): Promise<boolean> {
@@ -290,11 +291,24 @@ export class AccountManager {
     const token = await this.getValidToken(account);
     const quota = await this.quotaApi.fetchRemoteQuota(token);
 
+    let changed = false;
     if (quota.weeklyExpiry && account.weeklyExpiry !== quota.weeklyExpiry) {
       account.weeklyExpiry = quota.weeklyExpiry;
+      changed = true;
+    }
+    if (typeof quota.weeklyPercent === 'number' && account.weeklyPercent !== quota.weeklyPercent) {
+      account.weeklyPercent = quota.weeklyPercent;
+      changed = true;
+    }
+    if (typeof quota.geminiHourlyPercent === 'number' && account.hourlyPercent !== quota.geminiHourlyPercent) {
+      account.hourlyPercent = quota.geminiHourlyPercent;
+      changed = true;
+    }
+
+    if (changed) {
       const idx = this.accounts.findIndex((a) => a.id === account.id);
       if (idx !== -1) {
-        this.accounts[idx].weeklyExpiry = quota.weeklyExpiry;
+        this.accounts[idx] = { ...account };
         this.saveAccounts().catch(() => {});
       }
     }
@@ -332,6 +346,7 @@ export class AccountManager {
     account: StoredAccount;
     hourlyPercent: number;
     hourlyReset: string | null;
+    weeklyPercent: number;
     weeklyExpiry: string | null;
     isAvailable: boolean;
   }>> {
@@ -348,13 +363,16 @@ export class AccountManager {
       const q = this.quotaCache.get(acc.id)?.quota;
       const hourlyPercent = q?.geminiHourlyPercent ?? 100;
       const hourlyReset = q?.geminiHourlyReset ?? null;
+      const weeklyPercent = q?.weeklyPercent ?? 100;
       const weeklyExpiry = this.getEffectiveWeeklyExpiryForAccount(acc);
-      const isAvailable = hourlyPercent > 0;
+      // Available if both 5-hour quota and weekly quota are > 0%
+      const isAvailable = hourlyPercent > 0 && weeklyPercent > 0;
 
       return {
         account: acc,
         hourlyPercent,
         hourlyReset,
+        weeklyPercent,
         weeklyExpiry,
         isAvailable,
       };
@@ -366,6 +384,7 @@ export class AccountManager {
     candidates: Array<{
       account: StoredAccount;
       hourlyPercent: number;
+      weeklyPercent: number;
       weeklyExpiry: string | null;
       hourlyReset: string | null;
       isAvailable: boolean;
@@ -376,32 +395,42 @@ export class AccountManager {
       return { optimal: null, candidates: [] };
     }
 
-    // Filter for accounts with hourly quota available (> 0%)
-    const available = evaluated.filter((e) => e.isAvailable);
+    // Sort all candidates by Gemini priority:
+    // 1. Available accounts (5h > 0% AND weekly > 0%) come first, sorted by earliest weeklyExpiry
+    // 2. Exhausted accounts come after, sorted by earliest recovery time
+    evaluated.sort((a, b) => {
+      if (a.isAvailable && !b.isAvailable) return -1;
+      if (!a.isAvailable && b.isAvailable) return 1;
 
-    let optimal: StoredAccount | null = null;
-    if (available.length > 0) {
-      // Sort primarily by nearest weekly expiry date (earliest timestamp first)
-      available.sort((a, b) => {
+      if (a.isAvailable && b.isAvailable) {
         const timeA = a.weeklyExpiry ? new Date(a.weeklyExpiry).getTime() : Number.MAX_SAFE_INTEGER;
         const timeB = b.weeklyExpiry ? new Date(b.weeklyExpiry).getTime() : Number.MAX_SAFE_INTEGER;
 
         if (timeA !== timeB) {
           return timeA - timeB; // Earliest weekly expiry first
         }
-        // Tie-breaker: higher hourly available percentage
+        // Tie-breaker 1: lower weekly percent remaining (burn quota nearing reset)
+        if (a.weeklyPercent !== b.weeklyPercent) {
+          return a.weeklyPercent - b.weeklyPercent;
+        }
+        // Tie-breaker 2: higher hourly available percentage
         return b.hourlyPercent - a.hourlyPercent;
-      });
-      optimal = available[0].account;
-    } else {
-      // If all accounts are exhausted (0%), prioritize the one whose hourly limit recovers first
-      evaluated.sort((a, b) => {
-        const resetA = a.hourlyReset ? new Date(a.hourlyReset).getTime() : Number.MAX_SAFE_INTEGER;
-        const resetB = b.hourlyReset ? new Date(b.hourlyReset).getTime() : Number.MAX_SAFE_INTEGER;
-        return resetA - resetB;
-      });
-      optimal = evaluated[0].account;
-    }
+      }
+
+      // Both are exhausted: sort by earliest recovery time
+      const getRecoveryTime = (item: typeof a) => {
+        if (item.hourlyPercent <= 0 && item.hourlyReset) {
+          return new Date(item.hourlyReset).getTime();
+        }
+        if (item.weeklyPercent <= 0 && item.weeklyExpiry) {
+          return new Date(item.weeklyExpiry).getTime();
+        }
+        return Number.MAX_SAFE_INTEGER;
+      };
+      return getRecoveryTime(a) - getRecoveryTime(b);
+    });
+
+    const optimal = evaluated[0]?.account || null;
 
     return { optimal, candidates: evaluated };
   }
@@ -439,36 +468,42 @@ export class AccountManager {
 
     const q = this.quotaCache.get(current.id)?.quota;
     const currentHourlyPercent = q?.geminiHourlyPercent ?? 100;
+    const currentWeeklyPercent = q?.weeklyPercent ?? 100;
+    const isExhausted = currentHourlyPercent <= 0 || currentWeeklyPercent <= 0;
 
-    // Rule: Stay on current account until its hourly limit is 0%
-    if (currentHourlyPercent > 0) {
+    // Rule: Stay on current account while it has available quota
+    if (!isExhausted) {
       return {
         rotated: false,
         currentAccount: current,
         newAccount: current,
-        reason: `Active account still has available quota (${currentHourlyPercent}%).`,
+        reason: `Active account still has available quota (5h: ${currentHourlyPercent}%, weekly: ${currentWeeklyPercent}%).`,
       };
     }
 
-    // Hourly quota is exhausted (0%) -> evaluate optimal switch
+    // Current account is exhausted -> evaluate optimal switch
     const { optimal } = await this.selectOptimalAccount();
     if (!optimal || optimal.id === current.id) {
       return {
         rotated: false,
         currentAccount: current,
         newAccount: current,
-        reason: 'All accounts have exhausted hourly quota or current is only available option.',
+        reason: 'All accounts have exhausted Gemini quota or current is only available option.',
       };
     }
 
     // Switch to optimal account
     await this.setActiveAccount(optimal.id);
 
+    const exhaustionReason = currentHourlyPercent <= 0
+      ? `5-hour limit exhausted (0%)`
+      : `Weekly limit exhausted (0%)`;
+
     return {
       rotated: true,
       currentAccount: current,
       newAccount: optimal,
-      reason: `Hourly quota exhausted (0%) on ${current.name}. Rotated to ${optimal.name} (nearest weekly expiry).`,
+      reason: `${exhaustionReason} on ${current.name}. Rotated to ${optimal.name} (nearest weekly expiry: ${this.getEffectiveWeeklyExpiryForAccount(optimal)}).`,
     };
   }
 }

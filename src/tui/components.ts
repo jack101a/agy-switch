@@ -91,6 +91,10 @@ export function formatResetCountdown(iso: string | null, isCompact: boolean = fa
             relative = `${mins}m`;
         }
 
+        if (isCompact) {
+            return `${C.brightCyan}in ${relative}${C.reset}`;
+        }
+
         const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const dayName = daysShort[target.getDay()];

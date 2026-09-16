@@ -118,7 +118,11 @@ async function runCliQuota(query?: string) {
             const weeklyIso = accountManager.getEffectiveWeeklyExpiryForAccount(acc);
             const weeklyStr = weeklyIso ? formatResetCountdown(weeklyIso, false) : `${C.gray}N/A${C.reset}`;
             const hourlyBar = makeProgressBar(100 - (q.geminiHourlyPercent ?? 100), 10);
-            console.log(`${C.bold}Gemini Hourly Quota:${C.reset} ${hourlyBar}  ${C.gray}│${C.reset}  ${C.bold}Weekly Expiry:${C.reset} ${weeklyStr}\n`);
+            const weeklyBar = makeProgressBar(100 - (q.weeklyPercent ?? 100), 10);
+            const hourlyResetStr = q.geminiHourlyReset ? formatResetCountdown(q.geminiHourlyReset, false) : `${C.gray}active${C.reset}`;
+
+            console.log(`${C.bold}Gemini 5-Hour:${C.reset}  ${hourlyBar}  ${C.gray}Resets: ${hourlyResetStr}${C.reset}`);
+            console.log(`${C.bold}Gemini Weekly:${C.reset}  ${weeklyBar}  ${C.gray}Resets: ${weeklyStr}${C.reset}\n`);
 
             if (isMobile) {
                 for (const m of q.models) {
@@ -331,6 +335,20 @@ async function runCliSelectBest() {
     console.log(`✔ Active Optimal Account: ${C.bold}${C.brightGreen}${res.account.name}${C.reset} (${res.account.email})`);
     console.log(`  Decision: ${C.dim}${res.reason}${C.reset}`);
     console.log(`  Weekly Expiry: ${weeklyStr}\n`);
+
+    if (res.candidates && res.candidates.length > 0) {
+        console.log(`${C.bold}Candidate Account Pool (Sorted by Gemini Priority):${C.reset}`);
+        for (const c of res.candidates) {
+            const hBar = makeProgressBar(100 - c.hourlyPercent, 8);
+            const wBar = makeProgressBar(100 - c.weeklyPercent, 8);
+            const exp = c.weeklyExpiry ? formatResetCountdown(c.weeklyExpiry, true) : `${C.gray}N/A${C.reset}`;
+            const statusTag = c.account.id === res.account.id
+                ? `${C.brightGreen}★ ACTIVE${C.reset}`
+                : (c.isAvailable ? `${C.brightCyan}AVAILABLE${C.reset}` : `${C.red}EXHAUSTED${C.reset}`);
+            console.log(`  ${c.account.name.padEnd(16)} 5h:${hBar} (${c.hourlyPercent}%)  Weekly:${wBar} (${c.weeklyPercent}%)  Exp: ${exp.padEnd(20)}  [${statusTag}]`);
+        }
+        console.log('');
+    }
 }
 
 async function runCliRotate(subcmd?: string) {

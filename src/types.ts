@@ -7,6 +7,8 @@ export interface StoredAccount {
     expiryTimestamp: number;
     addedAt: number;
     weeklyExpiry?: string | null;
+    weeklyPercent?: number;
+    hourlyPercent?: number;
 }
 
 export interface ActiveAccount {
@@ -23,8 +25,25 @@ export interface QuotaModel {
     resetAt: string | null;
 }
 
+export interface QuotaBucketSummary {
+    bucketId: string;
+    displayName: string;
+    window: string;
+    resetTime?: string | null;
+    description?: string | null;
+    remainingFraction: number;
+    remainingPercent: number;
+}
+
+export interface QuotaGroupSummary {
+    displayName: string;
+    description?: string | null;
+    buckets: QuotaBucketSummary[];
+}
+
 export interface QuotaResult {
     models: QuotaModel[];
+    groups?: QuotaGroupSummary[];
     tier: string | null;
     tierName: string | null;
     isForbidden: boolean;
@@ -32,7 +51,14 @@ export interface QuotaResult {
     errorMessage?: string;
     geminiHourlyPercent?: number;
     geminiHourlyReset?: string | null;
+    geminiHourlyDescription?: string | null;
+    weeklyPercent?: number;
     weeklyExpiry?: string | null;
+    weeklyDescription?: string | null;
+    claudeHourlyPercent?: number;
+    claudeHourlyReset?: string | null;
+    claudeWeeklyPercent?: number;
+    claudeWeeklyReset?: string | null;
 }
 
 export interface AccountQuota {

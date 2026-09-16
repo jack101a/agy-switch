@@ -338,6 +338,19 @@ app.get('/', (_req, res) => {
                 }).join('') : \`<p style="color: var(--text-muted); font-size: 0.8rem; margin: 0.75rem 0;">No quota data fetched yet. Click refresh below.</p>\`;
 
                 const hourlyPercent = quota?.geminiHourlyPercent ?? 100;
+                const weeklyPercent = quota?.weeklyPercent ?? 100;
+                const hourlyReset = quota?.geminiHourlyReset;
+                let hourlyResetDisplay = '';
+                if (hourlyReset) {
+                    const diffH = new Date(hourlyReset).getTime() - Date.now();
+                    if (diffH > 0) {
+                        const mins = Math.floor(diffH / 60000);
+                        const h = Math.floor(mins / 60);
+                        const m = mins % 60;
+                        hourlyResetDisplay = \`Resets in \${h > 0 ? h + 'h ' : ''}\${m}m\`;
+                    }
+                }
+
                 let weeklyDisplay = 'Not set';
                 if (acc.effectiveWeeklyExpiry) {
                     const diffMs = new Date(acc.effectiveWeeklyExpiry).getTime() - Date.now();
@@ -368,11 +381,17 @@ app.get('/', (_req, res) => {
                             </div>
                         </div>
 
-                        <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border); padding: 0.5rem 0.75rem; border-radius: 6px; margin: 0.6rem 0; display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem;">
-                            <div><span style="color: var(--text-muted);">Gemini Hourly:</span> <strong>\${hourlyPercent}%/100%</strong></div>
-                            <div style="display: flex; align-items: center; gap: 0.35rem;">
-                                <span style="color: var(--text-muted);">Weekly:</span> <strong>\${weeklyDisplay}</strong>
-                                <button class="btn-secondary" style="padding: 1px 5px; font-size: 0.7rem; cursor: pointer;" onclick="promptSetWeekly('\${acc.id}', '\${acc.name}')" title="Set weekly reset date">✏️</button>
+                        <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border); padding: 0.6rem 0.75rem; border-radius: 8px; margin: 0.6rem 0; display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.78rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div><span style="color: var(--text-muted);">Gemini 5-Hour:</span> <strong>\${hourlyPercent}%/100%</strong></div>
+                                <div style="color: var(--text-muted); font-size: 0.75rem;">\${hourlyResetDisplay}</div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div><span style="color: var(--text-muted);">Gemini Weekly:</span> <strong>\${weeklyPercent}%/100%</strong></div>
+                                <div style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.75rem;">
+                                    <strong>\${weeklyDisplay}</strong>
+                                    <button class="btn-secondary" style="padding: 1px 5px; font-size: 0.7rem; cursor: pointer;" onclick="promptSetWeekly('\${acc.id}', '\${acc.name}')" title="Set weekly reset date">✏️</button>
+                                </div>
                             </div>
                         </div>
 
