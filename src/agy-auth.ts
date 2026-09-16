@@ -8,12 +8,16 @@ import {
     C,
     makeProgressBar,
     formatResetCountdown,
+    parseWeeklyDate,
     stripAnsi,
 } from './tui/components.js';
+
+import { RotatorService } from './services/rotatorService.js';
 
 const authService = new GoogleAuthService();
 const quotaApi = new QuotaApiService();
 const accountManager = new AccountManager(authService, quotaApi);
+const rotatorService = new RotatorService(accountManager);
 
 await accountManager.initialize();
 
@@ -110,7 +114,11 @@ async function runCliQuota(query?: string) {
                 continue;
             }
 
-            console.log(`${C.bold}Tier:${C.reset} ${C.brightGreen}${q.tierName || 'Standard'}${C.reset}\n`);
+            console.log(`${C.bold}Tier:${C.reset} ${C.brightGreen}${q.tierName || 'Standard'}${C.reset}`);
+            const weeklyIso = accountManager.getEffectiveWeeklyExpiryForAccount(acc);
+            const weeklyStr = weeklyIso ? formatResetCountdown(weeklyIso, false) : `${C.gray}N/A${C.reset}`;
+            const hourlyBar = makeProgressBar(100 - (q.geminiHourlyPercent ?? 100), 10);
+            console.log(`${C.bold}Gemini Hourly Quota:${C.reset} ${hourlyBar}  ${C.gray}│${C.reset}  ${C.bold}Weekly Expiry:${C.reset} ${weeklyStr}\n`);
 
             if (isMobile) {
                 for (const m of q.models) {
@@ -236,8 +244,11 @@ ${C.bold}Usage:${C.reset}
   ${C.green}agy-auth list [--json]${C.reset}       List connected accounts
   ${C.green}agy-auth switch <name|#>${C.reset}   Switch active account instantly
   ${C.green}agy-auth quota [name|#]${C.reset}    Detailed model quotas & reset countdowns
+  ${C.green}agy-auth set-weekly <name|#> [date]${C.reset} Set weekly quota reset day/date (e.g. "18-Sep", "Friday")
   ${C.green}agy-auth add${C.reset}                 Connect new Google account
   ${C.green}agy-auth remove <name|#>${C.reset}   Disconnect an account
+  ${C.green}agy-auth select-best${C.reset}           Select & activate optimal account (Gemini quota + weekly expiry)
+  ${C.green}agy-auth rotate [start|stop]${C.reset}   Manage background watcher daemon
   ${C.green}agy-auth dashboard${C.reset}           Start web dashboard on http://0.0.0.0:${DASHBOARD_PORT}
   ${C.green}agy-auth help${C.reset}                Show this help menu
 
@@ -248,10 +259,109 @@ ${C.bold}Interactive TUI Hotkeys:${C.reset}
   ${C.bold}Enter / Space${C.reset} Activate highlighted account
   ${C.bold}[a]${C.reset}           Add new Google account
   ${C.bold}[d] / [x]${C.reset}     Disconnect / remove highlighted account
+  ${C.bold}[w]${C.reset}           Configure weekly quota reset date/day
   ${C.bold}[r]${C.reset}           Refresh live quotas from Google Cloud
-  ${C.bold}[w]${C.reset}           Launch web dashboard
+  ${C.bold}[b]${C.reset}           Launch web dashboard
   ${C.bold}[q] / Esc${C.reset}     Quit
 `);
+}
+
+async function runCliSetWeekly(accountQuery?: string, dateInput?: string) {
+    if (!accountQuery) {
+        console.log(`\n${C.bold}Usage:${C.reset} ${C.green}agy-auth set-weekly <name|#|email> [date|day]${C.reset}`);
+        console.log(`Examples:`);
+        console.log(`  ${C.dim}agy-auth set-weekly 1 18-Sep${C.reset}`);
+        console.log(`  ${C.dim}agy-auth set-weekly Ajay Friday${C.reset}`);
+        console.log(`  ${C.dim}agy-auth set-weekly 2 "2026-09-20 00:00"${C.reset}`);
+        console.log(`  ${C.dim}agy-auth set-weekly 3 clear${C.reset}\n`);
+        return;
+    }
+
+    const accounts = accountManager.getAccounts();
+    let target = accounts.find((a) => a.name.toLowerCase() === accountQuery.toLowerCase() || a.email.toLowerCase() === accountQuery.toLowerCase());
+    if (!target) {
+        const num = parseInt(accountQuery, 10);
+        if (!isNaN(num) && num >= 1 && num <= accounts.length) {
+            target = accounts[num - 1];
+        }
+    }
+    if (!target) {
+        target = accounts.find((a) => a.name.toLowerCase().includes(accountQuery.toLowerCase()) || a.email.toLowerCase().includes(accountQuery.toLowerCase()));
+    }
+
+    if (!target) {
+        console.log(`\n${C.red}Account not found: "${accountQuery}"${C.reset}\n`);
+        return;
+    }
+
+    if (!dateInput) {
+        const effective = accountManager.getEffectiveWeeklyExpiryForAccount(target);
+        const formatted = effective ? formatResetCountdown(effective, false) : 'N/A';
+        console.log(`\nAccount: ${C.bold}${target.name}${C.reset} (${target.email})`);
+        console.log(`Current Weekly Expiry: ${formatted}\n`);
+        return;
+    }
+
+    if (['clear', 'reset', 'none', 'remove'].includes(dateInput.toLowerCase())) {
+        await accountManager.setWeeklyExpiry(target.id, null);
+        console.log(`\n${C.brightGreen}✔ Cleared weekly reset for ${target.name}.${C.reset}\n`);
+        return;
+    }
+
+    const parsed = parseWeeklyDate(dateInput);
+    if (!parsed) {
+        console.log(`\n${C.red}❌ Could not parse date: "${dateInput}". Try formats like "18-Sep", "Friday", "2026-09-20", or "+3d".${C.reset}\n`);
+        return;
+    }
+
+    await accountManager.setWeeklyExpiry(target.id, parsed);
+    const formatted = formatResetCountdown(parsed, false);
+    console.log(`\n${C.brightGreen}✔ Set weekly reset for ${target.name} to: ${formatted}${C.reset}\n`);
+}
+
+async function runCliSelectBest() {
+    console.log(`\n${C.bold}${C.brightCyan}⚡ Evaluating accounts for Gemini quota & nearest weekly expiry...${C.reset}`);
+    const res = await rotatorService.selectAndActivateOptimal();
+    if (!res.account) {
+        console.log(`${C.yellow}No accounts registered.${C.reset}\n`);
+        return;
+    }
+    const effectiveWeekly = accountManager.getEffectiveWeeklyExpiryForAccount(res.account);
+    const weeklyStr = effectiveWeekly ? formatResetCountdown(effectiveWeekly, false) : `${C.gray}N/A${C.reset}`;
+    console.log(`✔ Active Optimal Account: ${C.bold}${C.brightGreen}${res.account.name}${C.reset} (${res.account.email})`);
+    console.log(`  Decision: ${C.dim}${res.reason}${C.reset}`);
+    console.log(`  Weekly Expiry: ${weeklyStr}\n`);
+}
+
+async function runCliRotate(subcmd?: string) {
+    if (subcmd === '--start' || subcmd === 'start') {
+        if (rotatorService.isDaemonRunning()) {
+            console.log(`${C.yellow}Auto-rotator is already running.${C.reset}`);
+            return;
+        }
+        const { spawn } = await import('child_process');
+        const scriptPath = process.argv[1];
+        const child = spawn(process.execPath, [scriptPath, 'rotate', '--daemon'], {
+            detached: true,
+            stdio: 'ignore',
+        });
+        child.unref();
+        console.log(`${C.brightGreen}✔ Auto-rotator background watcher started.${C.reset}`);
+    } else if (subcmd === '--stop' || subcmd === 'stop') {
+        const stopped = rotatorService.stopDaemon();
+        if (stopped) {
+            console.log(`${C.brightGreen}✔ Auto-rotator background watcher stopped.${C.reset}`);
+        } else {
+            console.log(`${C.gray}Auto-rotator was not running.${C.reset}`);
+        }
+    } else if (subcmd === '--daemon') {
+        await rotatorService.runDaemon();
+    } else if (subcmd === '--status' || subcmd === 'status') {
+        const running = rotatorService.isDaemonRunning();
+        console.log(`Auto-rotator status: ${running ? `${C.brightGreen}RUNNING (ONLINE)${C.reset}` : `${C.gray}STOPPED (OFFLINE)${C.reset}`}`);
+    } else {
+        await runCliSelectBest();
+    }
 }
 
 switch (cmd) {
@@ -279,6 +389,17 @@ switch (cmd) {
     case 'remove':
     case 'rm':
         await runCliRemove(param);
+        break;
+    case 'set-weekly':
+    case 'weekly':
+        await runCliSetWeekly(param, filteredArgs[2]);
+        break;
+    case 'select-best':
+    case 'best':
+        await runCliSelectBest();
+        break;
+    case 'rotate':
+        await runCliRotate(param);
         break;
     case 'dashboard': {
         console.log(`\n${C.brightCyan}⚡ Starting AG Switchboard Dashboard at http://0.0.0.0:${DASHBOARD_PORT}...${C.reset}\n`);

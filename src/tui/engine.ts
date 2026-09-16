@@ -9,6 +9,7 @@ import {
     truncate,
     makeProgressBar,
     formatResetCountdown,
+    parseWeeklyDate,
     getTopModels,
     getTermWidth,
 } from './components.js';
@@ -105,6 +106,8 @@ export class TUIEngine {
             const tier = quota?.tierName || 'Standard';
             const models = getTopModels(quota, isMobile ? 2 : 3);
             const quickKey = idx < 9 ? `${idx + 1}` : '';
+            const hourlyPct = quota?.geminiHourlyPercent ?? 100;
+            const weeklyIso = this.accountManager.getEffectiveWeeklyExpiryForAccount(acc);
 
             if (isMobile) {
                 const cardBorder = isActive ? C.brightGreen : (isCursor ? C.brightCyan : C.gray);
@@ -129,6 +132,8 @@ export class TUIEngine {
                     add(`  ${C.inverse}${C.bold}${C.brightCyan} [ Press ${quickKey ? quickKey + ' or ' : ''}ENTER to Activate ] ${C.reset}`);
                 }
 
+                const weeklyStrMobile = weeklyIso ? formatResetCountdown(weeklyIso, true) : `${C.gray}N/A${C.reset}`;
+                add(`  ${C.bold}Gemini Hourly:${C.reset} ${hourlyPct}%  ${C.gray}│${C.reset}  ${C.bold}Weekly:${C.reset} ${weeklyStrMobile}`);
                 add(`  ${C.gray}┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${C.reset}`);
 
                 if (models.length > 0) {
@@ -164,6 +169,13 @@ export class TUIEngine {
                 }
 
                 add(`${cardColor}│${C.reset}${padRight(topBanner, width - 2)}${cardColor}│${C.reset}`);
+
+                const barWidth = width >= 86 ? 10 : 8;
+                const hourlyBar = makeProgressBar(100 - hourlyPct, barWidth);
+                const weeklyStrDesktop = weeklyIso ? formatResetCountdown(weeklyIso, false) : `${C.gray}N/A${C.reset}`;
+                const weeklyLabel = width >= 86 ? 'Weekly Expiry:' : 'Weekly:';
+                const summaryRow = `   ${C.bold}Gemini Hourly:${C.reset} ${hourlyBar}  ${C.gray}│${C.reset}  ${C.bold}${weeklyLabel}${C.reset} ${weeklyStrDesktop}`;
+                add(`${cardColor}│${C.reset}${padRight(summaryRow, width - 2)}${cardColor}│${C.reset}`);
                 add(`${cardColor}├${'┄'.repeat(width - 2)}┤${C.reset}`);
 
                 if (models.length > 0) {
@@ -190,10 +202,12 @@ export class TUIEngine {
         // Navigation Footer
         if (isMobile) {
             add(`${C.gray}${'═'.repeat(width)}${C.reset}`);
-            add(`${C.bold}[1-9]${C.reset}:Switch  ${C.bold}[a]${C.reset}:Add  ${C.bold}[d]${C.reset}:Remove  ${C.bold}[r]${C.reset}:Refresh  ${C.bold}[q]${C.reset}:Quit`);
+            add(`${C.bold}[1-9]${C.reset}:Switch ${C.bold}[a]${C.reset}:Add ${C.bold}[d]${C.reset}:Remove ${C.bold}[w]${C.reset}:Weekly ${C.bold}[r]${C.reset}:Refresh ${C.bold}[q]${C.reset}:Quit`);
         } else {
             add(`${C.gray}╭${'─'.repeat(width - 2)}╮${C.reset}`);
-            const navRow = `  ${C.bold}[1-9]${C.reset} Quick Switch   ${C.bold}[a]${C.reset} Add Account   ${C.bold}[d]${C.reset} Remove Account   ${C.bold}[r]${C.reset} Refresh   ${C.bold}[w]${C.reset} Web Dashboard   ${C.bold}[q]${C.reset} Exit`;
+            const navRow = width >= 100
+                ? `  ${C.bold}[1-9]${C.reset} Quick Switch   ${C.bold}[a]${C.reset} Add Account   ${C.bold}[d]${C.reset} Remove Account   ${C.bold}[w]${C.reset} Weekly Reset   ${C.bold}[r]${C.reset} Refresh   ${C.bold}[b]${C.reset} Web Dashboard   ${C.bold}[q]${C.reset} Exit`
+                : `  ${C.bold}[1-9]${C.reset} Switch  ${C.bold}[a]${C.reset} Add  ${C.bold}[d]${C.reset} Remove  ${C.bold}[w]${C.reset} Weekly  ${C.bold}[r]${C.reset} Refresh  ${C.bold}[b]${C.reset} Web  ${C.bold}[q]${C.reset} Exit`;
             add(`${C.gray}│${C.reset}${padRight(navRow, width - 2)}${C.gray}│${C.reset}`);
             add(`${C.gray}╰${'─'.repeat(width - 2)}╯${C.reset}`);
         }
@@ -320,6 +334,76 @@ export class TUIEngine {
                     this.statusMessage = `${C.yellow}Account ${target.name} removed.${C.reset}`;
                 } else {
                     this.statusMessage = `${C.yellow}Cancelled removal.${C.reset}`;
+                }
+                finishPrompt();
+                resolve();
+            });
+        });
+    }
+
+    private async promptSetWeeklyExpiry(): Promise<void> {
+        const accounts = this.accountManager.getAccounts();
+        const target = accounts[this.selectedIndex];
+        if (!target) return;
+
+        this.isPrompting = true;
+        this.disableMouse();
+        if (process.stdin.isTTY) process.stdin.setRawMode(false);
+        this.showCursor();
+        this.clearScreen();
+
+        const currentEffective = this.accountManager.getEffectiveWeeklyExpiryForAccount(target);
+        const currentStr = currentEffective ? formatResetCountdown(currentEffective, false) : 'None';
+
+        console.log(`\n${C.bold}${C.brightCyan}📅 Configure Weekly Quota Reset${C.reset}\n`);
+        console.log(`Account: ${C.bold}${target.name}${C.reset} (${target.email})`);
+        console.log(`Current: ${currentStr}\n`);
+        console.log(`${C.dim}Enter the day or date when this account's weekly quota resets.`);
+        console.log(`Examples: "18-Sep", "Friday", "2026-09-20 00:00", "+3d", or "clear"${C.reset}\n`);
+
+        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+        const finishPrompt = () => {
+            rl.close();
+            this.isPrompting = false;
+            this.clearScreen();
+            this.hideCursor();
+            this.enableMouse();
+            if (process.stdin.isTTY) {
+                process.stdin.setRawMode(true);
+                process.stdin.resume();
+            }
+            this.renderFrame();
+        };
+
+        return new Promise<void>((resolve) => {
+            rl.on('SIGINT', () => {
+                this.statusMessage = `${C.yellow}Cancelled weekly expiry update.${C.reset}`;
+                finishPrompt();
+                resolve();
+            });
+
+            rl.question(`${C.bold}Enter reset date/day (or Enter to keep current): ${C.reset}`, async (ans) => {
+                const trimmed = ans.trim();
+                if (!trimmed) {
+                    this.statusMessage = `${C.yellow}Kept existing weekly reset.${C.reset}`;
+                    finishPrompt();
+                    resolve();
+                    return;
+                }
+
+                if (['clear', 'reset', 'none', 'remove'].includes(trimmed.toLowerCase())) {
+                    await this.accountManager.setWeeklyExpiry(target.id, null);
+                    this.statusMessage = `${C.brightGreen}✔ Cleared weekly reset for ${target.name}.${C.reset}`;
+                } else {
+                    const parsed = parseWeeklyDate(trimmed);
+                    if (parsed) {
+                        await this.accountManager.setWeeklyExpiry(target.id, parsed);
+                        const formatted = formatResetCountdown(parsed, false);
+                        this.statusMessage = `${C.brightGreen}✔ Set weekly reset for ${target.name}: ${formatted}${C.reset}`;
+                    } else {
+                        this.statusMessage = `${C.red}❌ Could not parse date format: "${trimmed}"${C.reset}`;
+                    }
                 }
                 finishPrompt();
                 resolve();
@@ -486,6 +570,9 @@ export class TUIEngine {
                         });
                         return;
                     } else if (str === 'w' || str === 'W') {
+                        await this.promptSetWeeklyExpiry();
+                        return;
+                    } else if (str === 'b' || str === 'B') {
                         this.statusMessage = `${C.brightCyan}Web dashboard running on http://0.0.0.0:${DASHBOARD_PORT}${C.reset}`;
                         const { spawn } = await import('child_process');
                         const child = spawn('node', [

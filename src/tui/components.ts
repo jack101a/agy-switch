@@ -91,16 +91,109 @@ export function formatResetCountdown(iso: string | null, isCompact: boolean = fa
             relative = `${mins}m`;
         }
 
-        const dayName = target.toLocaleDateString('en-GB', { weekday: 'short' });
+        const daysShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const dayName = daysShort[target.getDay()];
+        const monthName = monthsShort[target.getMonth()];
+        const dateStr = days > 0 ? `${dayName} ${target.getDate()} ${monthName}` : dayName;
         const time = target.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-        if (isCompact) {
-            return `${C.brightCyan}in ${relative}${C.reset} ${C.gray}(${dayName} ${time})${C.reset}`;
-        }
-        return `${C.brightCyan}in ${relative}${C.reset} ${C.gray}(${dayName} ${time})${C.reset}`;
+        return `${C.brightCyan}in ${relative}${C.reset} ${C.gray}(${dateStr} ${time})${C.reset}`;
     } catch {
         return `${C.gray}N/A${C.reset}`;
     }
+}
+
+export function parseWeeklyDate(input: string): string | null {
+    if (!input) return null;
+    const str = input.trim().toLowerCase();
+    if (['none', 'clear', 'reset', 'null', 'remove'].includes(str)) return null;
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+
+    // Check weekday: mon, tue, wed, thu, fri, sat, sun
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const shortDays = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    const targetDayIndex = days.findIndex(d => d.startsWith(str)) !== -1 
+        ? days.findIndex(d => d.startsWith(str))
+        : shortDays.findIndex(d => d === str);
+
+    if (targetDayIndex !== -1) {
+        const todayDay = now.getDay();
+        let diff = targetDayIndex - todayDay;
+        if (diff <= 0) diff += 7; // Next occurrence
+        const target = new Date(now.getTime() + diff * 24 * 60 * 60 * 1000);
+        target.setHours(23, 59, 59, 0);
+        return target.toISOString();
+    }
+
+    // Relative like "+3d", "in 3d", "3 days"
+    const relMatch = str.match(/(?:in|\+)?\s*(\d+)\s*d(?:ays?)?/);
+    if (relMatch) {
+        const daysAdd = parseInt(relMatch[1], 10);
+        return new Date(now.getTime() + daysAdd * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    // Patterns like "16-sep", "16 sep", "sep 16", "17-sep 12:00", "16/09"
+    const monthNames = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const dayMonthMatch = str.match(/^(\d{1,2})[-/\s]+([a-z]{3,9})(?:[-/\s]+(\d{2,4}))?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/i);
+    if (dayMonthMatch) {
+        const day = parseInt(dayMonthMatch[1], 10);
+        const mStr = dayMonthMatch[2].substring(0, 3).toLowerCase();
+        const mIdx = monthNames.indexOf(mStr);
+        const year = dayMonthMatch[3] ? parseInt(dayMonthMatch[3], 10) : currentYear;
+        const hour = dayMonthMatch[4] !== undefined ? parseInt(dayMonthMatch[4], 10) : 23;
+        const min = dayMonthMatch[5] !== undefined ? parseInt(dayMonthMatch[5], 10) : 59;
+        const sec = dayMonthMatch[6] !== undefined ? parseInt(dayMonthMatch[6], 10) : 59;
+        if (mIdx !== -1) {
+            const target = new Date(year, mIdx, day, hour, min, sec);
+            return target.toISOString();
+        }
+    }
+
+    const monthDayMatch = str.match(/^([a-z]{3,9})[-/\s]+(\d{1,2})(?:[-/\s]+(\d{2,4}))?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/i);
+    if (monthDayMatch) {
+        const mStr = monthDayMatch[1].substring(0, 3).toLowerCase();
+        const mIdx = monthNames.indexOf(mStr);
+        const day = parseInt(monthDayMatch[2], 10);
+        const year = monthDayMatch[3] ? parseInt(monthDayMatch[3], 10) : currentYear;
+        const hour = monthDayMatch[4] !== undefined ? parseInt(monthDayMatch[4], 10) : 23;
+        const min = monthDayMatch[5] !== undefined ? parseInt(monthDayMatch[5], 10) : 59;
+        const sec = monthDayMatch[6] !== undefined ? parseInt(monthDayMatch[6], 10) : 59;
+        if (mIdx !== -1) {
+            const target = new Date(year, mIdx, day, hour, min, sec);
+            return target.toISOString();
+        }
+    }
+
+    const parsed = Date.parse(input);
+    if (!isNaN(parsed)) {
+        return new Date(parsed).toISOString();
+    }
+
+    return null;
+}
+
+export function getEffectiveWeeklyExpiry(iso?: string | null, fallbackAnchorMs?: number): string | null {
+    if (!iso && !fallbackAnchorMs) return null;
+    let d: Date;
+    if (iso) {
+        d = new Date(iso);
+        if (isNaN(d.getTime())) {
+            if (!fallbackAnchorMs) return null;
+            d = new Date(fallbackAnchorMs);
+        }
+    } else {
+        d = new Date(fallbackAnchorMs!);
+    }
+
+    const now = Date.now();
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    while (d.getTime() <= now) {
+        d = new Date(d.getTime() + SEVEN_DAYS_MS);
+    }
+    return d.toISOString();
 }
 
 // ─── Priority Models ───────────────────────────────────────────────────────────

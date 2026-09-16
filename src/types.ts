@@ -6,6 +6,7 @@ export interface StoredAccount {
     refreshToken: string;
     expiryTimestamp: number;
     addedAt: number;
+    weeklyExpiry?: string | null;
 }
 
 export interface ActiveAccount {
@@ -29,6 +30,9 @@ export interface QuotaResult {
     isForbidden: boolean;
     isError: boolean;
     errorMessage?: string;
+    geminiHourlyPercent?: number;
+    geminiHourlyReset?: string | null;
+    weeklyExpiry?: string | null;
 }
 
 export interface AccountQuota {

@@ -25,8 +25,8 @@ export const OAUTH_SCOPES = [
 ];
 
 export const QUOTA_API_ENDPOINTS = [
-    'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
     'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
+    'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
 ];
 
 export const LOAD_CODE_ASSIST_ENDPOINTS = [
@@ -48,6 +48,9 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
 export const DATA_DIR = `${process.env.HOME || '/home/ubuntu'}/.ag-switchboard`;
 export const ACCOUNTS_FILE = `${DATA_DIR}/accounts.json`;
 export const ACTIVE_ACCOUNT_FILE = `${DATA_DIR}/active.json`;
+export const ROTATOR_PID_FILE = `${DATA_DIR}/rotator.pid`;
+export const ROTATOR_LOG_FILE = `${DATA_DIR}/rotator.log`;
+export const ROTATOR_CHECK_INTERVAL_MS = 60 * 1000;
 
 export const USER_AGENT = 'Antigravity/4.1.29 Chrome/132.0.6834.160 Electron/39.2.3';
 export const POLL_INTERVAL_MS = 60 * 1000;

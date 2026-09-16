@@ -46,7 +46,43 @@ export class QuotaApiService {
 
         const rawBuckets = quotaData.buckets || quotaData.modelQuotas || quotaData.quotaBuckets || [];
         const models = this.parseBuckets(rawBuckets);
-        return { models, tier, tierName, isForbidden: false, isError: false };
+
+        const geminiModels = models.filter((m) => m.modelId.includes('gemini'));
+        let geminiHourlyPercent: number = 100;
+        let geminiHourlyReset: string | null = null;
+        let weeklyExpiry: string | null = null;
+
+        const now = Date.now();
+        for (const m of models) {
+            if (m.resetAt) {
+                const diff = new Date(m.resetAt).getTime() - now;
+                if (diff > 24 * 60 * 60 * 1000) {
+                    if (!weeklyExpiry || new Date(m.resetAt).getTime() < new Date(weeklyExpiry).getTime()) {
+                        weeklyExpiry = m.resetAt;
+                    }
+                }
+            }
+        }
+
+        if (geminiModels.length > 0) {
+            const sample = geminiModels.find((m) => m.modelId === 'gemini-2.5-pro' || m.modelId === 'gemini-2.5-flash') || geminiModels[0];
+            geminiHourlyPercent = Math.max(0, Math.min(100, 100 - sample.usedPercent));
+            geminiHourlyReset = sample.resetAt;
+            if (sample.resetAt && new Date(sample.resetAt).getTime() - now > 24 * 60 * 60 * 1000) {
+                weeklyExpiry = sample.resetAt;
+            }
+        }
+
+        return {
+            models,
+            tier,
+            tierName,
+            isForbidden: false,
+            isError: false,
+            geminiHourlyPercent,
+            geminiHourlyReset,
+            weeklyExpiry,
+        };
     }
 
     private async loadProjectInfo(

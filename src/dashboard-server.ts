@@ -3,6 +3,7 @@ import { AccountManager } from './managers/accountManager.js';
 import { GoogleAuthService } from './services/googleAuth.js';
 import { QuotaApiService } from './services/quotaApi.js';
 import { DASHBOARD_PORT } from './constants.js';
+import { parseWeeklyDate } from './tui/components.js';
 
 const authService = new GoogleAuthService();
 const quotaApi = new QuotaApiService();
@@ -26,6 +27,8 @@ app.get('/api/accounts', async (_req, res) => {
             email: acc.email,
             name: acc.name,
             addedAt: acc.addedAt,
+            weeklyExpiry: acc.weeklyExpiry || null,
+            effectiveWeeklyExpiry: accountManager.getEffectiveWeeklyExpiryForAccount(acc),
             isActive: active?.id === acc.id,
             quota: cache.get(acc.id) || null,
         }));
@@ -56,6 +59,26 @@ app.post('/api/accounts/:id/activate', async (req, res) => {
             return res.status(404).json({ success: false, error: 'Account not found' });
         }
         res.json({ success: true });
+    } catch (e: any) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/accounts/:id/weekly', async (req, res) => {
+    try {
+        const { weeklyExpiry } = req.body;
+        let dateIso: string | null = null;
+        if (weeklyExpiry && !['clear', 'reset', 'none', 'remove'].includes(weeklyExpiry.toLowerCase())) {
+            dateIso = parseWeeklyDate(weeklyExpiry);
+            if (!dateIso) {
+                return res.status(400).json({ success: false, error: 'Could not parse date format.' });
+            }
+        }
+        const ok = await accountManager.setWeeklyExpiry(req.params.id, dateIso);
+        if (!ok) {
+            return res.status(404).json({ success: false, error: 'Account not found' });
+        }
+        res.json({ success: true, weeklyExpiry: dateIso });
     } catch (e: any) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -314,6 +337,24 @@ app.get('/', (_req, res) => {
                     \`;
                 }).join('') : \`<p style="color: var(--text-muted); font-size: 0.8rem; margin: 0.75rem 0;">No quota data fetched yet. Click refresh below.</p>\`;
 
+                const hourlyPercent = quota?.geminiHourlyPercent ?? 100;
+                let weeklyDisplay = 'Not set';
+                if (acc.effectiveWeeklyExpiry) {
+                    const diffMs = new Date(acc.effectiveWeeklyExpiry).getTime() - Date.now();
+                    if (diffMs > 0) {
+                        const totalMins = Math.floor(diffMs / 60000);
+                        const hours = Math.floor(totalMins / 60);
+                        const days = Math.floor(hours / 24);
+                        const remHours = hours % 24;
+                        const mins = totalMins % 60;
+                        const rel = days > 0 ? \`\${days}d \${remHours}h\` : (hours > 0 ? \`\${hours}h \${mins}m\` : \`\${mins}m\`);
+                        const dateStr = new Date(acc.effectiveWeeklyExpiry).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+                        weeklyDisplay = \`in \${rel} (\${dateStr})\`;
+                    } else {
+                        weeklyDisplay = 'Resetting soon';
+                    }
+                }
+
                 return \`
                     <div class="card \${acc.isActive ? 'active' : ''}">
                         <div class="card-header">
@@ -324,6 +365,14 @@ app.get('/', (_req, res) => {
                             <div class="badge-group">
                                 <span class="badge badge-tier">\${tierName}</span>
                                 \${acc.isActive ? '<span class="badge badge-active">Active</span>' : ''}
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(255,255,255,0.04); border: 1px solid var(--border); padding: 0.5rem 0.75rem; border-radius: 6px; margin: 0.6rem 0; display: flex; justify-content: space-between; align-items: center; font-size: 0.78rem;">
+                            <div><span style="color: var(--text-muted);">Gemini Hourly:</span> <strong>\${hourlyPercent}%/100%</strong></div>
+                            <div style="display: flex; align-items: center; gap: 0.35rem;">
+                                <span style="color: var(--text-muted);">Weekly:</span> <strong>\${weeklyDisplay}</strong>
+                                <button class="btn-secondary" style="padding: 1px 5px; font-size: 0.7rem; cursor: pointer;" onclick="promptSetWeekly('\${acc.id}', '\${acc.name}')" title="Set weekly reset date">✏️</button>
                             </div>
                         </div>
 
@@ -412,8 +461,28 @@ app.get('/', (_req, res) => {
 
         async function deleteAccount(id) {
             if (confirm('Disconnect this account from AG Switchboard?')) {
-                await fetch(\`/api/accounts/\${id}\`, { method: 'DELETE' });
+                await fetch('/api/accounts/' + id, { method: 'DELETE' });
                 fetchAccounts();
+            }
+        }
+
+        async function promptSetWeekly(id, name) {
+            const input = prompt('Enter weekly reset day/date for ' + name + ' (e.g. "18-Sep", "Friday", "2026-09-20", "+3d", or "clear"):');
+            if (input === null) return;
+            try {
+                const res = await fetch('/api/accounts/' + id + '/weekly', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weeklyExpiry: input.trim() })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    fetchAccounts();
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to set weekly expiry'));
+                }
+            } catch (e) {
+                alert('Network error: ' + e.message);
             }
         }
 
