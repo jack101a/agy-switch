@@ -24,19 +24,19 @@ export const OAUTH_SCOPES = [
     'https://www.googleapis.com/auth/experimentsandconfigs',
 ];
 
-export const QUOTA_API_ENDPOINTS = [
-    'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
-    'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
+export const QUOTA_SUMMARY_API_ENDPOINTS = [
+    'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+    'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
 ];
 
-export const QUOTA_SUMMARY_API_ENDPOINTS = [
-    'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
-    'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+export const QUOTA_API_ENDPOINTS = [
+    'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
+    'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota',
 ];
 
 export const LOAD_CODE_ASSIST_ENDPOINTS = [
-    'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
     'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
+    'https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
 ];
 
 export const MODEL_DISPLAY_NAMES: Record<string, string> = {
