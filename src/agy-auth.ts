@@ -251,7 +251,7 @@ ${C.bold}Usage:${C.reset}
   ${C.green}agy-auth set-weekly <name|#> [date]${C.reset} Set weekly quota reset day/date (e.g. "18-Sep", "Friday")
   ${C.green}agy-auth add${C.reset}                 Connect new Google account
   ${C.green}agy-auth remove <name|#>${C.reset}   Disconnect an account
-  ${C.green}agy-auth select-best${C.reset}           Select & activate optimal account (Gemini quota + weekly expiry)
+  ${C.green}agy-auth select-best [--force]${C.reset} Evaluate accounts (auto-switches ONLY if active at 0%)
   ${C.green}agy-auth rotate [start|stop]${C.reset}   Manage background watcher daemon
   ${C.green}agy-auth dashboard${C.reset}           Start web dashboard on http://0.0.0.0:${DASHBOARD_PORT}
   ${C.green}agy-auth help${C.reset}                Show this help menu
@@ -324,15 +324,17 @@ async function runCliSetWeekly(accountQuery?: string, dateInput?: string) {
 }
 
 async function runCliSelectBest() {
+    const force = process.argv.includes('--force') || process.argv.includes('-f');
     console.log(`\n${C.bold}${C.brightCyan}⚡ Evaluating accounts for Gemini quota & nearest weekly expiry...${C.reset}`);
-    const res = await rotatorService.selectAndActivateOptimal();
+    const res = await rotatorService.selectAndActivateOptimal(force);
     if (!res.account) {
         console.log(`${C.yellow}No accounts registered.${C.reset}\n`);
         return;
     }
     const effectiveWeekly = accountManager.getEffectiveWeeklyExpiryForAccount(res.account);
     const weeklyStr = effectiveWeekly ? formatResetCountdown(effectiveWeekly, false) : `${C.gray}N/A${C.reset}`;
-    console.log(`✔ Active Optimal Account: ${C.bold}${C.brightGreen}${res.account.name}${C.reset} (${res.account.email})`);
+    const headerTitle = res.activated ? `Switched to Optimal Account:` : `Active Account Retained:`;
+    console.log(`✔ ${headerTitle} ${C.bold}${C.brightGreen}${res.account.name}${C.reset} (${res.account.email})`);
     console.log(`  Decision: ${C.dim}${res.reason}${C.reset}`);
     console.log(`  Weekly Expiry: ${weeklyStr}\n`);
 

@@ -342,7 +342,7 @@ export class AccountManager {
   // Auto-Rotation Logic (Gemini Hourly Limit & Weekly Expiry Priority)
   // ---------------------------------------------------------------------------
 
-  async evaluateAccounts(): Promise<Array<{
+  async evaluateAccounts(forceRefresh = false): Promise<Array<{
     account: StoredAccount;
     hourlyPercent: number;
     hourlyReset: string | null;
@@ -350,9 +350,11 @@ export class AccountManager {
     weeklyExpiry: string | null;
     isAvailable: boolean;
   }>> {
-    // Ensure quotas are loaded for all accounts
+    const now = Date.now();
+    // Ensure quotas are loaded and reasonably fresh (TTL 60s) for all accounts
     for (const acc of this.accounts) {
-      if (!this.quotaCache.has(acc.id)) {
+      const cached = this.quotaCache.get(acc.id);
+      if (forceRefresh || !cached || (now - cached.fetchedAt > 60000)) {
         try {
           await this.refreshQuotaForAccount(acc);
         } catch {}
@@ -379,7 +381,7 @@ export class AccountManager {
     });
   }
 
-  async selectOptimalAccount(): Promise<{
+  async selectOptimalAccount(forceRefresh = false): Promise<{
     optimal: StoredAccount | null;
     candidates: Array<{
       account: StoredAccount;
@@ -390,7 +392,7 @@ export class AccountManager {
       isAvailable: boolean;
     }>;
   }> {
-    const evaluated = await this.evaluateAccounts();
+    const evaluated = await this.evaluateAccounts(forceRefresh);
     if (evaluated.length === 0) {
       return { optimal: null, candidates: [] };
     }
@@ -481,14 +483,15 @@ export class AccountManager {
       };
     }
 
-    // Current account is exhausted -> evaluate optimal switch
-    const { optimal } = await this.selectOptimalAccount();
-    if (!optimal || optimal.id === current.id) {
+    // Current account is exhausted -> evaluate optimal switch with fresh quotas
+    const { optimal, candidates } = await this.selectOptimalAccount(true);
+    const bestCandidate = candidates.find((c) => c.account.id === optimal?.id);
+    if (!optimal || !bestCandidate?.isAvailable || optimal.id === current.id) {
       return {
         rotated: false,
         currentAccount: current,
         newAccount: current,
-        reason: 'All accounts have exhausted Gemini quota or current is only available option.',
+        reason: 'All accounts have exhausted Gemini quota (0%) or current is only available option.',
       };
     }
 

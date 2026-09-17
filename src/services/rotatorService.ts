@@ -21,12 +21,38 @@ export class RotatorService {
         } catch {}
     }
 
-    async selectAndActivateOptimal(): Promise<{
+    async selectAndActivateOptimal(force = false): Promise<{
         activated: boolean;
         account: any;
         reason: string;
         candidates: any[];
     }> {
+        const active = await this.accountManager.getActiveAccount();
+        if (active) {
+            const current = this.accountManager.getAccount(active.id);
+            if (current) {
+                try {
+                    await this.accountManager.refreshQuotaForAccount(current);
+                } catch {}
+                const q = this.accountManager.getCachedQuota(current.id)?.quota;
+                const hourlyPercent = q?.geminiHourlyPercent ?? 100;
+                const weeklyPercent = q?.weeklyPercent ?? 100;
+                const isExhausted = hourlyPercent <= 0 || weeklyPercent <= 0;
+
+                // STRICT RULE: Keep active account as long as it has available quota (>0%).
+                // Do not auto-switch unless active account reaches 0% or switch is explicitly forced.
+                if (!isExhausted && !force) {
+                    const { candidates } = await this.accountManager.selectOptimalAccount();
+                    return {
+                        activated: false,
+                        account: current,
+                        reason: `Active account ${current.name} still has available quota (5h: ${hourlyPercent}%, weekly: ${weeklyPercent}%). Not switching unless 0%.`,
+                        candidates,
+                    };
+                }
+            }
+        }
+
         const { optimal, candidates } = await this.accountManager.selectOptimalAccount();
         if (!optimal) {
             return {
@@ -37,14 +63,16 @@ export class RotatorService {
             };
         }
 
-        const active = await this.accountManager.getActiveAccount();
         if (active?.id !== optimal.id) {
             await this.accountManager.setActiveAccount(optimal.id);
-            this.log(`[STARTUP] Activated optimal account: ${optimal.name} (${optimal.email}) [Weekly Expiry: ${optimal.weeklyExpiry || 'N/A'}]`);
+            const reason = active
+                ? `Active account exhausted (0%). Switched to ${optimal.name} (${optimal.email}) [nearest weekly expiry: ${optimal.weeklyExpiry || 'N/A'}]`
+                : `No active account. Activated ${optimal.name} (${optimal.email}) [nearest weekly expiry: ${optimal.weeklyExpiry || 'N/A'}]`;
+            this.log(`[SWITCH] ${reason}`);
             return {
                 activated: true,
                 account: optimal,
-                reason: `Switched from ${active?.email || 'none'} to ${optimal.email} (nearest weekly expiry)`,
+                reason,
                 candidates,
             };
         }
@@ -52,7 +80,7 @@ export class RotatorService {
         return {
             activated: false,
             account: optimal,
-            reason: `Account ${optimal.email} is already active and optimal.`,
+            reason: `Account ${optimal.email} is already active.`,
             candidates,
         };
     }
