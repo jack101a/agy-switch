@@ -4,6 +4,7 @@ export interface StoredAccount {
     name: string;
     accessToken: string;
     refreshToken: string;
+    idToken?: string;
     expiryTimestamp: number;
     addedAt: number;
     weeklyExpiry?: string | null;

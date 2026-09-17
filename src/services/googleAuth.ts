@@ -16,6 +16,7 @@ import { HttpError } from '../types.js';
 export interface OAuthResult {
     accessToken: string;
     refreshToken: string;
+    idToken?: string;
     expiryTimestamp: number;
     email: string;
     name: string;
@@ -149,6 +150,7 @@ export class GoogleAuthService {
         return {
             accessToken: tokens.access_token,
             refreshToken: tokens.refresh_token,
+            idToken: tokens.id_token,
             expiryTimestamp: Math.floor(Date.now() / 1000) + (tokens.expires_in || 3600),
             email: userInfo.email,
             name: userInfo.name,
@@ -213,6 +215,7 @@ export class GoogleAuthService {
                     resolve({
                         accessToken: tokens.access_token,
                         refreshToken: tokens.refresh_token,
+                        idToken: tokens.id_token,
                         expiryTimestamp: Math.floor(Date.now() / 1000) + (tokens.expires_in || 3600),
                         email: userInfo.email,
                         name: userInfo.name,
@@ -259,7 +262,7 @@ export class GoogleAuthService {
         code: string,
         redirectUri: string,
         codeVerifier?: string
-    ): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
+    ): Promise<{ access_token: string; refresh_token: string; expires_in: number; id_token?: string }> {
         const bodyParams: Record<string, string> = {
             client_id: CLIENT_ID,
             client_secret: CLIENT_SECRET,
@@ -272,12 +275,18 @@ export class GoogleAuthService {
         }
 
         const body = new URLSearchParams(bodyParams).toString();
-        return this.postForm(TOKEN_URL, body);
+        const res = await this.postForm(TOKEN_URL, body);
+        return {
+            access_token: res.access_token,
+            refresh_token: res.refresh_token,
+            expires_in: res.expires_in || 3600,
+            id_token: res.id_token,
+        };
     }
 
     async refreshAccessToken(
         refreshToken: string
-    ): Promise<{ access_token: string; expires_in: number; refresh_token?: string; expiryTimestamp: number }> {
+    ): Promise<{ access_token: string; expires_in: number; refresh_token?: string; id_token?: string; expiryTimestamp: number }> {
         const body = new URLSearchParams({
             client_id: CLIENT_ID,
             client_secret: CLIENT_SECRET,
@@ -291,6 +300,7 @@ export class GoogleAuthService {
             access_token: res.access_token,
             expires_in,
             refresh_token: res.refresh_token,
+            id_token: res.id_token,
             expiryTimestamp: Math.floor(Date.now() / 1000) + expires_in,
         };
     }

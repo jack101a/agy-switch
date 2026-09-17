@@ -113,8 +113,29 @@ export class RotatorService {
         } catch { return null; }
     }
 
-    private async restartAgy(): Promise<{ restarted: boolean; newPid?: number; error?: string }> {
+    public async restartAgy(): Promise<{ restarted: boolean; newPid?: number; error?: string }> {
         try {
+            // Check if systemd user service agy-remote-control is active
+            try {
+                const isActive = execSync('systemctl --user is-active agy-remote-control.service', {
+                    encoding: 'utf-8',
+                    timeout: 4000,
+                }).trim();
+                if (isActive === 'active') {
+                    this.log(`[AGY] Restarting via systemctl --user restart agy-remote-control.service...`);
+                    execSync('systemctl --user restart agy-remote-control.service', {
+                        encoding: 'utf-8',
+                        timeout: 10000,
+                    });
+                    await new Promise((r) => setTimeout(r, 2000));
+                    const newProc = this.findAgyProcess();
+                    this.log(`[AGY] Restarted via systemd (new PID ${newProc?.pid ?? 'unknown'})`);
+                    return { restarted: true, newPid: newProc?.pid };
+                }
+            } catch (e: any) {
+                // systemd service not found or not active; proceed to standalone fallback
+            }
+
             const current = this.findAgyProcess();
             const args = current?.args ?? this.getAgyArgs();
             this.saveAgyArgs(args);
@@ -203,6 +224,17 @@ export class RotatorService {
                 ? `Active account exhausted (0%). Switched to ${optimal.name} (${optimal.email})`
                 : `No active account. Activated ${optimal.name} (${optimal.email})`;
             this.log(`[SWITCH] ${reason}`);
+
+            // Restart AGY to pick up new tokens
+            const restartResult = await this.restartAgy();
+            this.log(`[AGY] ${restartResult.restarted ? `Restarted (PID ${restartResult.newPid})` : `Restart failed: ${restartResult.error}`}`);
+
+            if (DISCORD_WEBHOOK_URL) {
+                const prevName = active ? (this.accountManager.getAccount(active.id)?.name || active.email) : 'None';
+                await sendDiscord(DISCORD_WEBHOOK_URL, prevName, optimal.name);
+                this.log(`[DISCORD] Notification sent`);
+            }
+
             return { activated: true, account: optimal, reason, candidates };
         }
 

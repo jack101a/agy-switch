@@ -178,12 +178,18 @@ async function runCliSwitch(param?: string) {
     }
 
     await accountManager.setActiveAccount(target.id);
+    const restartRes = await rotatorService.restartAgy();
 
     if (isJson) {
-        console.log(JSON.stringify({ success: true, activeAccount: target }));
+        console.log(JSON.stringify({ success: true, activeAccount: target, agyRestarted: restartRes.restarted }));
         return;
     }
-    console.log(`\n${C.bgGreen}${C.bold}${C.white} ✔ ACTIVE ACCOUNT SWITCHED TO: ${target.name} (${target.email}) ${C.reset}\n`);
+    console.log(`\n${C.bgGreen}${C.bold}${C.white} ✔ ACTIVE ACCOUNT SWITCHED TO: ${target.name} (${target.email}) ${C.reset}`);
+    if (restartRes.restarted) {
+        console.log(`${C.dim}  ↳ AGY daemon restarted (PID ${restartRes.newPid}) to apply new account.${C.reset}\n`);
+    } else {
+        console.log('');
+    }
 }
 
 async function runCliAdd() {

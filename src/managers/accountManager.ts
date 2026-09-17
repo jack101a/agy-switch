@@ -73,7 +73,7 @@ export class AccountManager {
     const homeDir = process.env.HOME || '/home/ubuntu';
     const expiryIso = new Date(account.expiryTimestamp * 1000).toISOString();
 
-    const standardPayload = {
+    const standardPayload: Record<string, any> = {
       token: {
         access_token: account.accessToken,
         token_type: 'Bearer',
@@ -82,6 +82,9 @@ export class AccountManager {
       },
       auth_method: 'consumer',
     };
+    if (account.idToken) {
+      standardPayload.id_token = account.idToken;
+    }
 
     const tokenPaths = [
       `${homeDir}/.gemini/jetski-standalone-oauth-token`,
@@ -141,6 +144,7 @@ export class AccountManager {
         name: result.name,
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,
+        idToken: result.idToken,
         expiryTimestamp: result.expiryTimestamp,
         addedAt: Date.now(),
       };
@@ -157,7 +161,7 @@ export class AccountManager {
   }
 
   async addAccountWithTokens(
-    tokens: { accessToken: string; refreshToken: string; expiryTimestamp: number },
+    tokens: { accessToken: string; refreshToken: string; expiryTimestamp: number; idToken?: string },
     userInfo: { email: string; name: string },
   ): Promise<StoredAccount> {
     const existingIndex = this.accounts.findIndex((a) => a.email === userInfo.email);
@@ -168,7 +172,9 @@ export class AccountManager {
         ...this.accounts[existingIndex],
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
+        idToken: tokens.idToken ?? this.accounts[existingIndex].idToken,
         expiryTimestamp: tokens.expiryTimestamp,
+        name: userInfo.name,
       };
       this.accounts[existingIndex] = account;
     } else {
@@ -178,6 +184,7 @@ export class AccountManager {
         name: userInfo.name,
         accessToken: tokens.accessToken,
         refreshToken: tokens.refreshToken,
+        idToken: tokens.idToken,
         expiryTimestamp: tokens.expiryTimestamp,
         addedAt: Date.now(),
       };
@@ -209,6 +216,24 @@ export class AccountManager {
     if (!account) {
       return false;
     }
+
+    // Ensure account has idToken for AGY remote authentication
+    if (!account.idToken && account.refreshToken) {
+      try {
+        const refreshed = await this.authService.refreshAccessToken(account.refreshToken);
+        if (refreshed.id_token) {
+          account.idToken = refreshed.id_token;
+          account.accessToken = refreshed.access_token;
+          account.expiryTimestamp = refreshed.expiryTimestamp;
+          const idx = this.accounts.findIndex((a) => a.id === account.id);
+          if (idx !== -1) {
+            this.accounts[idx] = account;
+          }
+          await this.saveAccounts();
+        }
+      } catch {}
+    }
+
     await this.saveActiveAccount(account.id, account.email);
 
     // Sync tokens to Antigravity runtime files
@@ -252,11 +277,15 @@ export class AccountManager {
           ...this.accounts[idx],
           accessToken: refreshed.access_token,
           refreshToken: refreshed.refresh_token ?? account.refreshToken,
+          idToken: refreshed.id_token ?? account.idToken,
           expiryTimestamp: refreshed.expiryTimestamp,
         };
         account.accessToken = refreshed.access_token;
         if (refreshed.refresh_token) {
           account.refreshToken = refreshed.refresh_token;
+        }
+        if (refreshed.id_token) {
+          account.idToken = refreshed.id_token;
         }
         account.expiryTimestamp = refreshed.expiryTimestamp;
       }
