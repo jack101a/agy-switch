@@ -57,6 +57,15 @@ export const ROTATOR_PID_FILE = `${DATA_DIR}/rotator.pid`;
 export const ROTATOR_LOG_FILE = `${DATA_DIR}/rotator.log`;
 export const ROTATOR_CHECK_INTERVAL_MS = 60 * 1000;
 
+// Discord webhook for account-switch notifications (override via env var)
+export const DISCORD_WEBHOOK_URL =
+    process.env.AG_DISCORD_WEBHOOK ||
+    'https://discord.com/api/webhooks/1468865074545426454/MIN4kR-XI0oUf4ZvgmYk9_9V8KXxuWeT7VsgnJRtgS8jzsh2MFfPCPrk3A0OeL51dZdi';
+
+// Path to the AGY daemon binary — must be restarted after account switch
+export const AGY_BINARY_PATH = process.env.AGY_BINARY_PATH || '/home/ubuntu/.local/bin/agy';
+export const AGY_PID_FILE = `${DATA_DIR}/agy.pid`;
+
 export const USER_AGENT = 'Antigravity/4.1.29 Chrome/132.0.6834.160 Electron/39.2.3';
 export const POLL_INTERVAL_MS = 60 * 1000;
 export const TOKEN_REFRESH_BUFFER_SECS = 300;
