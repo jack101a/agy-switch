@@ -5,143 +5,140 @@ import { AccountManager } from '../managers/accountManager.js';
 import {
     ROTATOR_PID_FILE,
     ROTATOR_LOG_FILE,
-    ROTATOR_CHECK_INTERVAL_MS,
     DATA_DIR,
     DISCORD_WEBHOOK_URL,
     AGY_BINARY_PATH,
     AGY_PID_FILE,
 } from '../constants.js';
 
+// ---------------------------------------------------------------------------
+// Adaptive polling tiers (active account Gemini 5h % only)
+// ---------------------------------------------------------------------------
+function getPollIntervalMs(hourlyPercent: number): number {
+    if (hourlyPercent <= 0)  return 0;              // rotate immediately — no sleep
+    if (hourlyPercent < 5)   return 30_000;         // < 5%  → 30s
+    if (hourlyPercent <= 10) return 60_000;         // 5–10% → 1 min
+    if (hourlyPercent <= 30) return 2 * 60_000;     // 10–30% → 2 min
+    return 5 * 60_000;                              // > 30%  → 5 min
+}
+
+function tierLabel(pct: number): string {
+    if (pct <= 0)  return 'EXHAUSTED → rotating';
+    if (pct < 5)   return '< 5% — 30s polls';
+    if (pct <= 10) return '5-10% — 1 min polls';
+    if (pct <= 30) return '10-30% — 2 min polls';
+    return '> 30% — 5 min polls';
+}
+
+// ---------------------------------------------------------------------------
+// Discord (Style A — orange bar, bold one-liner)
+// ---------------------------------------------------------------------------
+async function sendDiscord(webhookUrl: string, fromName: string, toName: string): Promise<void> {
+    if (!webhookUrl) return;
+    return new Promise((resolve) => {
+        try {
+            const now = new Date().toLocaleString('en-IN', {
+                timeZone: 'Asia/Kolkata',
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true,
+            });
+            const payload = JSON.stringify({
+                embeds: [{
+                    color: 0xFEA832, // orange
+                    description: `🔄  **${fromName}** → **${toName}**  (⚡ Quota Rotated · ${now} IST)`,
+                }],
+            });
+            const url = new URL(webhookUrl);
+            const req = https.request(
+                {
+                    hostname: url.hostname,
+                    path: url.pathname + url.search,
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(payload),
+                    },
+                },
+                (res) => { res.resume(); resolve(); },
+            );
+            req.on('error', () => resolve());
+            req.setTimeout(8000, () => { req.destroy(); resolve(); });
+            req.write(payload);
+            req.end();
+        } catch {
+            resolve();
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// AGY restart
+// ---------------------------------------------------------------------------
 export class RotatorService {
     constructor(private accountManager: AccountManager) {}
 
     private log(message: string): void {
-        const timestamp = new Date().toISOString();
-        const line = `[${timestamp}] ${message}\n`;
+        const ts = new Date().toISOString();
+        const line = `[${ts}] ${message}\n`;
         try {
-            if (!fs.existsSync(DATA_DIR)) {
-                fs.mkdirSync(DATA_DIR, { recursive: true });
-            }
+            if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
             fs.appendFileSync(ROTATOR_LOG_FILE, line, 'utf-8');
         } catch {}
     }
 
-    // -------------------------------------------------------------------------
-    // Discord Notification
-    // -------------------------------------------------------------------------
-
-    private async sendDiscordNotification(message: string): Promise<void> {
-        if (!DISCORD_WEBHOOK_URL) return;
-        return new Promise((resolve) => {
-            try {
-                const body = JSON.stringify({ content: message });
-                const url = new URL(DISCORD_WEBHOOK_URL);
-                const req = https.request(
-                    {
-                        hostname: url.hostname,
-                        path: url.pathname + url.search,
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Content-Length': Buffer.byteLength(body),
-                        },
-                    },
-                    (res) => {
-                        res.resume();
-                        resolve();
-                    },
-                );
-                req.on('error', () => resolve());
-                req.setTimeout(8000, () => { req.destroy(); resolve(); });
-                req.write(body);
-                req.end();
-            } catch {
-                resolve();
-            }
-        });
-    }
-
-    // -------------------------------------------------------------------------
-    // AGY Daemon Restart
-    // -------------------------------------------------------------------------
-
     private getAgyArgs(): string[] {
         try {
-            // Read the saved AGY command-line args from when we first saw it running
-            const savedPath = `${DATA_DIR}/agy-args.json`;
-            if (fs.existsSync(savedPath)) {
-                return JSON.parse(fs.readFileSync(savedPath, 'utf-8'));
-            }
+            const p = `${DATA_DIR}/agy-args.json`;
+            if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
         } catch {}
-        // Fallback to default args
         return ['--remote-control', '--hub-port', '4400', '--remote-control-name', 'homeserver-mini'];
     }
 
     private saveAgyArgs(args: string[]): void {
-        try {
-            fs.writeFileSync(`${DATA_DIR}/agy-args.json`, JSON.stringify(args), 'utf-8');
-        } catch {}
+        try { fs.writeFileSync(`${DATA_DIR}/agy-args.json`, JSON.stringify(args), 'utf-8'); } catch {}
     }
 
     private findAgyProcess(): { pid: number; args: string[] } | null {
         try {
-            const out = execSync(
-                `ps aux | grep '[a]gy --remote-control'`,
-                { encoding: 'utf-8', timeout: 5000 },
-            ).trim();
+            const out = execSync(`ps aux | grep '[a]gy --remote-control'`, { encoding: 'utf-8', timeout: 5000 }).trim();
             if (!out) return null;
             const line = out.split('\n')[0];
             const parts = line.trim().split(/\s+/);
             const pid = parseInt(parts[1], 10);
-            // Extract args after the binary name
             const cmdStart = line.indexOf(AGY_BINARY_PATH);
             const fullCmd = cmdStart !== -1 ? line.slice(cmdStart + AGY_BINARY_PATH.length).trim() : '';
             const args = fullCmd ? fullCmd.split(/\s+/).filter(Boolean) : this.getAgyArgs();
             return isNaN(pid) ? null : { pid, args };
-        } catch {
-            return null;
-        }
+        } catch { return null; }
     }
 
     private async restartAgy(): Promise<{ restarted: boolean; newPid?: number; error?: string }> {
         try {
-            // Find current AGY process and save its args
             const current = this.findAgyProcess();
             const args = current?.args ?? this.getAgyArgs();
             this.saveAgyArgs(args);
 
             if (current?.pid) {
-                this.log(`[AGY] Sending SIGTERM to AGY process (PID ${current.pid})...`);
-                try {
-                    process.kill(current.pid, 'SIGTERM');
-                } catch {}
-                // Wait for process to die (up to 5s)
+                this.log(`[AGY] Sending SIGTERM to PID ${current.pid}`);
+                try { process.kill(current.pid, 'SIGTERM'); } catch {}
                 for (let i = 0; i < 10; i++) {
                     await new Promise((r) => setTimeout(r, 500));
-                    try { process.kill(current.pid, 0); } catch { break; } // dead
+                    try { process.kill(current.pid, 0); } catch { break; }
                 }
             }
 
-            // Small buffer before restart
             await new Promise((r) => setTimeout(r, 1500));
-
-            // Restart AGY with same args
             this.log(`[AGY] Restarting: ${AGY_BINARY_PATH} ${args.join(' ')}`);
-            const child = spawn(AGY_BINARY_PATH, args, {
-                detached: true,
-                stdio: 'ignore',
-                env: process.env,
-            });
+            const child = spawn(AGY_BINARY_PATH, args, { detached: true, stdio: 'ignore', env: process.env });
             child.unref();
 
-            // Save new PID
             if (child.pid) {
                 fs.writeFileSync(AGY_PID_FILE, child.pid.toString(), 'utf-8');
-                this.log(`[AGY] Restarted successfully (new PID ${child.pid})`);
+                this.log(`[AGY] Restarted (new PID ${child.pid})`);
                 return { restarted: true, newPid: child.pid };
             }
-
-            return { restarted: false, error: 'Failed to get new PID from spawned process' };
+            return { restarted: false, error: 'No PID returned' };
         } catch (e: any) {
             this.log(`[AGY] Restart failed: ${e.message}`);
             return { restarted: false, error: e.message };
@@ -149,9 +146,24 @@ export class RotatorService {
     }
 
     // -------------------------------------------------------------------------
-    // Core: Select & Activate Optimal (used by `agy-auth select-best`)
+    // Get active account Gemini 5h quota (fresh HTTP call)
     // -------------------------------------------------------------------------
+    private async getActiveHourlyPercent(): Promise<{ percent: number; name: string; email: string } | null> {
+        const activeInfo = await this.accountManager.getActiveAccount();
+        if (!activeInfo) return null;
+        const account = this.accountManager.getAccount(activeInfo.id);
+        if (!account) return null;
+        try {
+            await this.accountManager.refreshQuotaForAccount(account);
+        } catch {}
+        const q = this.accountManager.getCachedQuota(account.id)?.quota;
+        const percent = q?.geminiHourlyPercent ?? 100;
+        return { percent, name: account.name, email: account.email };
+    }
 
+    // -------------------------------------------------------------------------
+    // select-best CLI command
+    // -------------------------------------------------------------------------
     async selectAndActivateOptimal(force = false): Promise<{
         activated: boolean;
         account: any;
@@ -162,15 +174,12 @@ export class RotatorService {
         if (active) {
             const current = this.accountManager.getAccount(active.id);
             if (current) {
-                try {
-                    await this.accountManager.refreshQuotaForAccount(current);
-                } catch {}
+                try { await this.accountManager.refreshQuotaForAccount(current); } catch {}
                 const q = this.accountManager.getCachedQuota(current.id)?.quota;
                 const hourlyPercent = q?.geminiHourlyPercent ?? 100;
                 const weeklyPercent = q?.weeklyPercent ?? 100;
                 const isExhausted = hourlyPercent <= 0 || weeklyPercent <= 0;
 
-                // STRICT RULE: Keep active account as long as it has available quota (>0%).
                 if (!isExhausted && !force) {
                     const { candidates } = await this.accountManager.selectOptimalAccount();
                     return {
@@ -185,179 +194,125 @@ export class RotatorService {
 
         const { optimal, candidates } = await this.accountManager.selectOptimalAccount();
         if (!optimal) {
-            return {
-                activated: false,
-                account: null,
-                reason: 'No accounts registered.',
-                candidates: [],
-            };
+            return { activated: false, account: null, reason: 'No accounts registered.', candidates: [] };
         }
 
         if (active?.id !== optimal.id) {
             await this.accountManager.setActiveAccount(optimal.id);
             const reason = active
-                ? `Active account exhausted (0%). Switched to ${optimal.name} (${optimal.email}) [nearest weekly expiry: ${optimal.weeklyExpiry || 'N/A'}]`
-                : `No active account. Activated ${optimal.name} (${optimal.email}) [nearest weekly expiry: ${optimal.weeklyExpiry || 'N/A'}]`;
+                ? `Active account exhausted (0%). Switched to ${optimal.name} (${optimal.email})`
+                : `No active account. Activated ${optimal.name} (${optimal.email})`;
             this.log(`[SWITCH] ${reason}`);
-            return {
-                activated: true,
-                account: optimal,
-                reason,
-                candidates,
-            };
+            return { activated: true, account: optimal, reason, candidates };
         }
 
-        return {
-            activated: false,
-            account: optimal,
-            reason: `Account ${optimal.email} is already active.`,
-            candidates,
-        };
+        return { activated: false, account: optimal, reason: `Account ${optimal.email} is already active.`, candidates };
     }
 
     // -------------------------------------------------------------------------
-    // Core: After-switch actions — restart AGY + Discord notification
+    // Daemon: adaptive polling on active account only
     // -------------------------------------------------------------------------
-
-    private async onAccountSwitched(
-        fromAccount: { name: string; email: string } | null,
-        toAccount: { name: string; email: string },
-        reason: string,
-    ): Promise<void> {
-        const fromLabel = fromAccount ? `**${fromAccount.name}** (\`${fromAccount.email}\`)` : '`none`';
-        const toLabel = `**${toAccount.name}** (\`${toAccount.email}\`)`;
-        const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true });
-
-        // 1. Restart AGY so it picks up the new token
-        this.log(`[AGY] Restarting AGY to apply new account token...`);
-        const restartResult = await this.restartAgy();
-        const restartStatus = restartResult.restarted
-            ? `✅ AGY restarted (PID ${restartResult.newPid})`
-            : `⚠️ AGY restart failed: ${restartResult.error}`;
-
-        this.log(`[AGY] ${restartStatus}`);
-
-        // 2. Send Discord notification
-        const discordMsg = [
-            `🔄 **AG Switchboard — Account Rotated**`,
-            ``,
-            `**From:** ${fromLabel}`,
-            `**To:** ${toLabel}`,
-            `**Reason:** ${reason}`,
-            `**AGY:** ${restartStatus}`,
-            `**Time:** ${now} IST`,
-        ].join('\n');
-
-        await this.sendDiscordNotification(discordMsg);
-        this.log(`[DISCORD] Notification sent`);
-    }
-
-    // -------------------------------------------------------------------------
-    // Daemon
-    // -------------------------------------------------------------------------
-
     async runDaemon(): Promise<void> {
-        if (!fs.existsSync(DATA_DIR)) {
-            fs.mkdirSync(DATA_DIR, { recursive: true });
-        }
+        if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-        // Save current AGY args on startup so we can restart it later
+        // Save AGY args on startup
         const agyProc = this.findAgyProcess();
         if (agyProc) {
             this.saveAgyArgs(agyProc.args);
-            this.log(`[DAEMON] Found AGY process (PID ${agyProc.pid}), saved args: ${agyProc.args.join(' ')}`);
+            this.log(`[DAEMON] Found AGY (PID ${agyProc.pid}), args saved`);
         }
 
-        // Check if already running
         if (this.isDaemonRunning()) {
             console.log('Rotator daemon is already running.');
             return;
         }
 
-        // Write PID
         fs.writeFileSync(ROTATOR_PID_FILE, process.pid.toString(), 'utf-8');
-        this.log(`[DAEMON] Watcher daemon started (PID ${process.pid})`);
+        this.log(`[DAEMON] Started (PID ${process.pid})`);
 
         const cleanup = () => {
-            try {
-                if (fs.existsSync(ROTATOR_PID_FILE)) {
-                    fs.unlinkSync(ROTATOR_PID_FILE);
-                }
-            } catch {}
-            this.log(`[DAEMON] Watcher daemon stopped (PID ${process.pid})`);
+            try { if (fs.existsSync(ROTATOR_PID_FILE)) fs.unlinkSync(ROTATOR_PID_FILE); } catch {}
+            this.log(`[DAEMON] Stopped (PID ${process.pid})`);
             process.exit(0);
         };
-
         process.on('SIGINT', cleanup);
         process.on('SIGTERM', cleanup);
 
-        console.log(`⚡ AG Switchboard Auto-Rotator running in background (PID ${process.pid})`);
+        console.log(`⚡ AG Switchboard Auto-Rotator running (PID ${process.pid}) — adaptive polling active`);
 
-        // Check immediately on start
-        try {
-            const res = await this.accountManager.checkAndAutoRotate();
-            if (res.rotated && res.newAccount) {
-                this.log(`[ROTATE] ${res.reason}`);
-                console.log(`[ROTATE] ${res.reason}`);
-                await this.onAccountSwitched(res.currentAccount, res.newAccount, res.reason);
-            }
-        } catch (e: any) {
-            this.log(`[ERROR] Check failed: ${e.message}`);
-        }
-
-        // Polling loop (checks every 60 seconds)
+        // -----------------------------------------------------------------------
+        // Main adaptive loop — checks ONLY active account quota
+        // -----------------------------------------------------------------------
         while (true) {
-            await new Promise((resolve) => setTimeout(resolve, ROTATOR_CHECK_INTERVAL_MS));
             try {
-                const res = await this.accountManager.checkAndAutoRotate();
-                if (res.rotated && res.newAccount) {
-                    this.log(`[ROTATE] ${res.reason}`);
-                    console.log(`[ROTATE] ${res.reason}`);
-                    await this.onAccountSwitched(res.currentAccount, res.newAccount, res.reason);
+                const status = await this.getActiveHourlyPercent();
+
+                if (!status) {
+                    this.log(`[POLL] No active account — sleeping 60s`);
+                    await new Promise((r) => setTimeout(r, 60_000));
+                    continue;
+                }
+
+                const { percent, name, email } = status;
+                const interval = getPollIntervalMs(percent);
+                this.log(`[POLL] ${name} (${email}) 5h: ${percent}% — ${tierLabel(percent)}`);
+
+                if (percent <= 0) {
+                    // Rotate immediately
+                    const res = await this.accountManager.checkAndAutoRotate();
+                    if (res.rotated && res.newAccount) {
+                        this.log(`[ROTATE] ${res.reason}`);
+                        console.log(`[ROTATE] ${res.reason}`);
+
+                        // Restart AGY
+                        const restartResult = await this.restartAgy();
+                        this.log(`[AGY] ${restartResult.restarted ? `Restarted (PID ${restartResult.newPid})` : `Restart failed: ${restartResult.error}`}`);
+
+                        // Discord notification (Style A)
+                        if (DISCORD_WEBHOOK_URL && res.currentAccount) {
+                            await sendDiscord(DISCORD_WEBHOOK_URL, res.currentAccount.name, res.newAccount.name);
+                            this.log(`[DISCORD] Notification sent`);
+                        }
+
+                        // After switching, sleep 5 min (new account has full quota)
+                        await new Promise((r) => setTimeout(r, 5 * 60_000));
+                    } else {
+                        // No switch possible, retry in 60s
+                        await new Promise((r) => setTimeout(r, 60_000));
+                    }
+                } else {
+                    await new Promise((r) => setTimeout(r, interval));
                 }
             } catch (e: any) {
-                this.log(`[ERROR] Check failed: ${e.message}`);
+                this.log(`[ERROR] ${e.message}`);
+                await new Promise((r) => setTimeout(r, 60_000));
             }
         }
     }
 
     isDaemonRunning(): boolean {
-        if (!fs.existsSync(ROTATOR_PID_FILE)) {
-            return false;
-        }
+        if (!fs.existsSync(ROTATOR_PID_FILE)) return false;
         try {
-            const pidStr = fs.readFileSync(ROTATOR_PID_FILE, 'utf-8').trim();
-            const pid = parseInt(pidStr, 10);
+            const pid = parseInt(fs.readFileSync(ROTATOR_PID_FILE, 'utf-8').trim(), 10);
             if (!pid) return false;
             process.kill(pid, 0);
             return true;
         } catch {
-            try {
-                fs.unlinkSync(ROTATOR_PID_FILE);
-            } catch {}
+            try { fs.unlinkSync(ROTATOR_PID_FILE); } catch {}
             return false;
         }
     }
 
     stopDaemon(): boolean {
-        if (!fs.existsSync(ROTATOR_PID_FILE)) {
-            return false;
-        }
+        if (!fs.existsSync(ROTATOR_PID_FILE)) return false;
         try {
-            const pidStr = fs.readFileSync(ROTATOR_PID_FILE, 'utf-8').trim();
-            const pid = parseInt(pidStr, 10);
-            if (pid) {
-                process.kill(pid, 'SIGTERM');
-            }
-            try {
-                fs.unlinkSync(ROTATOR_PID_FILE);
-            } catch {}
-            this.log(`[DAEMON] Stopped watcher daemon (PID ${pid})`);
+            const pid = parseInt(fs.readFileSync(ROTATOR_PID_FILE, 'utf-8').trim(), 10);
+            if (pid) process.kill(pid, 'SIGTERM');
+            try { fs.unlinkSync(ROTATOR_PID_FILE); } catch {}
+            this.log(`[DAEMON] Stopped watcher (PID ${pid})`);
             return true;
         } catch {
-            try {
-                fs.unlinkSync(ROTATOR_PID_FILE);
-            } catch {}
+            try { fs.unlinkSync(ROTATOR_PID_FILE); } catch {}
             return false;
         }
     }
