@@ -31,21 +31,22 @@ function tierLabel(pct: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Weekly quota refresh TTL — checked infrequently (drains over 7 days)
+// Weekly quota refresh TTL
+//  checked on daemon start, then on its own schedule based on % remaining
 // ---------------------------------------------------------------------------
 function weeklyCheckIntervalMs(weeklyPct: number): number {
-    if (weeklyPct <= 0)  return 0;           // exhausted — don't wait, act now
-    if (weeklyPct < 5)   return 5 * 60_000; // < 5% → re-check every 5 min
-    if (weeklyPct <= 10) return 10 * 60_000;// 5–10% → 10 min
-    if (weeklyPct <= 50) return 30 * 60_000;// 10–50% → 30 min
-    return 2 * 60 * 60_000;                  // > 50% → 2 hours
+    if (weeklyPct <= 0)   return 0;               // exhausted → rotate now
+    if (weeklyPct < 3)    return 60_000;           // < 3%  → every 1 min
+    if (weeklyPct < 5)    return 2 * 60_000;       // 3–5%  → every 2 min
+    if (weeklyPct <= 10)  return 60 * 60_000;      // 5–10% → every 1 hour
+    return 2 * 60 * 60_000;                         // 15%+  → every 2 hours
 }
 
 function weeklyLabel(pct: number): string {
-    if (pct <= 0)  return 'weekly EXHAUSTED';
-    if (pct < 5)   return `weekly ${pct}% (recheck 5min)`;
-    if (pct <= 10) return `weekly ${pct}% (recheck 10min)`;
-    if (pct <= 50) return `weekly ${pct}% (recheck 30min)`;
+    if (pct <= 0)   return 'weekly EXHAUSTED';
+    if (pct < 3)    return `weekly ${pct}% (recheck 1min)`;
+    if (pct < 5)    return `weekly ${pct}% (recheck 2min)`;
+    if (pct <= 10)  return `weekly ${pct}% (recheck 1h)`;
     return `weekly ${pct}% (recheck 2h)`;
 }
 
