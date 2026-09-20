@@ -38,7 +38,7 @@ function weeklyCheckIntervalMs(weeklyPct: number): number {
     if (weeklyPct <= 0)   return 0;               // exhausted → rotate now
     if (weeklyPct < 3)    return 60_000;           // < 3%  → every 1 min
     if (weeklyPct < 5)    return 2 * 60_000;       // 3–5%  → every 2 min
-    if (weeklyPct <= 10)  return 60 * 60_000;      // 5–10% → every 1 hour
+    if (weeklyPct <= 10)  return 30 * 60_000;       // 5–10% → every 30 min
     return 2 * 60 * 60_000;                         // 15%+  → every 2 hours
 }
 
@@ -46,7 +46,7 @@ function weeklyLabel(pct: number): string {
     if (pct <= 0)   return 'weekly EXHAUSTED';
     if (pct < 3)    return `weekly ${pct}% (recheck 1min)`;
     if (pct < 5)    return `weekly ${pct}% (recheck 2min)`;
-    if (pct <= 10)  return `weekly ${pct}% (recheck 1h)`;
+    if (pct <= 10)  return `weekly ${pct}% (recheck 30min)`;
     return `weekly ${pct}% (recheck 2h)`;
 }
 
