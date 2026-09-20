@@ -31,6 +31,25 @@ function tierLabel(pct: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Weekly quota refresh TTL — checked infrequently (drains over 7 days)
+// ---------------------------------------------------------------------------
+function weeklyCheckIntervalMs(weeklyPct: number): number {
+    if (weeklyPct <= 0)  return 0;           // exhausted — don't wait, act now
+    if (weeklyPct < 5)   return 5 * 60_000; // < 5% → re-check every 5 min
+    if (weeklyPct <= 10) return 10 * 60_000;// 5–10% → 10 min
+    if (weeklyPct <= 50) return 30 * 60_000;// 10–50% → 30 min
+    return 2 * 60 * 60_000;                  // > 50% → 2 hours
+}
+
+function weeklyLabel(pct: number): string {
+    if (pct <= 0)  return 'weekly EXHAUSTED';
+    if (pct < 5)   return `weekly ${pct}% (recheck 5min)`;
+    if (pct <= 10) return `weekly ${pct}% (recheck 10min)`;
+    if (pct <= 50) return `weekly ${pct}% (recheck 30min)`;
+    return `weekly ${pct}% (recheck 2h)`;
+}
+
+// ---------------------------------------------------------------------------
 // Discord (Style A — orange bar, bold one-liner)
 // ---------------------------------------------------------------------------
 async function sendDiscord(webhookUrl: string, fromName: string, toName: string): Promise<void> {
@@ -76,6 +95,9 @@ async function sendDiscord(webhookUrl: string, fromName: string, toName: string)
 // AGY restart
 // ---------------------------------------------------------------------------
 export class RotatorService {
+    // Weekly quota is slow-draining (7-day cycle) — cache it with its own TTL
+    private weeklyCache: { pct: number; nextCheckAt: number } | null = null;
+
     constructor(private accountManager: AccountManager) {}
 
     private log(message: string): void {
@@ -167,19 +189,51 @@ export class RotatorService {
     }
 
     // -------------------------------------------------------------------------
-    // Get active account Gemini 5h quota (fresh HTTP call)
+    // Get active account quota
+    //  - 5h (hourly): always freshly fetched — drains fast, needs tight polling
+    //  - weekly: cached with its own TTL — drains over 7 days, no need to hit
+    //            the API every 30s. Re-fetched only when TTL expires.
     // -------------------------------------------------------------------------
-    private async getActiveHourlyPercent(): Promise<{ percent: number; name: string; email: string } | null> {
+    private async getActiveQuota(): Promise<{
+        hourly: number;
+        weekly: number;
+        weeklyFresh: boolean; // true = weekly was just re-fetched this cycle
+        name: string;
+        email: string;
+    } | null> {
         const activeInfo = await this.accountManager.getActiveAccount();
         if (!activeInfo) return null;
         const account = this.accountManager.getAccount(activeInfo.id);
         if (!account) return null;
+
+        // Always refresh to get fresh 5h quota
         try {
             await this.accountManager.refreshQuotaForAccount(account);
         } catch {}
         const q = this.accountManager.getCachedQuota(account.id)?.quota;
-        const percent = q?.geminiHourlyPercent ?? 100;
-        return { percent, name: account.name, email: account.email };
+        const hourly = q?.geminiHourlyPercent ?? 100;
+
+        // Weekly: use cache unless TTL has expired or no cache yet
+        const now = Date.now();
+        const weeklyDue = !this.weeklyCache || now >= this.weeklyCache.nextCheckAt;
+
+        let weekly: number;
+        let weeklyFresh: boolean;
+
+        if (weeklyDue) {
+            // Cache just got refreshed via refreshQuotaForAccount above
+            weekly = q?.weeklyPercent ?? 100;
+            this.weeklyCache = {
+                pct: weekly,
+                nextCheckAt: now + weeklyCheckIntervalMs(weekly),
+            };
+            weeklyFresh = true;
+        } else {
+            weekly = this.weeklyCache!.pct;
+            weeklyFresh = false;
+        }
+
+        return { hourly, weekly, weeklyFresh, name: account.name, email: account.email };
     }
 
     // -------------------------------------------------------------------------
@@ -273,11 +327,11 @@ export class RotatorService {
         console.log(`⚡ AG Switchboard Auto-Rotator running (PID ${process.pid}) — adaptive polling active`);
 
         // -----------------------------------------------------------------------
-        // Main adaptive loop — checks ONLY active account quota
+        // Main adaptive loop — checks active account 5h AND weekly quota
         // -----------------------------------------------------------------------
         while (true) {
             try {
-                const status = await this.getActiveHourlyPercent();
+                const status = await this.getActiveQuota();
 
                 if (!status) {
                     this.log(`[POLL] No active account — sleeping 60s`);
@@ -285,11 +339,24 @@ export class RotatorService {
                     continue;
                 }
 
-                const { percent, name, email } = status;
-                const interval = getPollIntervalMs(percent);
-                this.log(`[POLL] ${name} (${email}) 5h: ${percent}% — ${tierLabel(percent)}`);
+                const { hourly, weekly, weeklyFresh, name, email } = status;
+                // Use the lower of the two limits to determine poll tier
+                const effectivePct = Math.min(hourly, weekly);
+                const exhausted = hourly <= 0 || weekly <= 0;
 
-                if (percent <= 0) {
+                const exhaustLabel = hourly <= 0 && weekly <= 0
+                    ? '5h+weekly EXHAUSTED'
+                    : hourly <= 0 ? '5h EXHAUSTED'
+                    : weekly <= 0 ? 'weekly EXHAUSTED'
+                    : tierLabel(effectivePct);
+
+                const weeklyStr = weeklyFresh
+                    ? weeklyLabel(weekly)          // freshly fetched
+                    : `weekly ~${weekly}% (cached)`;// served from cache
+
+                this.log(`[POLL] ${name} (${email}) 5h: ${hourly}%  ${weeklyStr} — ${exhaustLabel}`);
+
+                if (exhausted) {
                     // Rotate immediately
                     const res = await this.accountManager.checkAndAutoRotate();
                     if (res.rotated && res.newAccount) {
@@ -306,13 +373,17 @@ export class RotatorService {
                             this.log(`[DISCORD] Notification sent`);
                         }
 
+                        // Reset weekly cache — new account has different weekly quota
+                        this.weeklyCache = null;
+
                         // After switching, sleep 5 min (new account has full quota)
                         await new Promise((r) => setTimeout(r, 5 * 60_000));
                     } else {
-                        // No switch possible, retry in 60s
+                        // No switch possible (all accounts exhausted), retry in 60s
                         await new Promise((r) => setTimeout(r, 60_000));
                     }
                 } else {
+                    const interval = getPollIntervalMs(effectivePct);
                     await new Promise((r) => setTimeout(r, interval));
                 }
             } catch (e: any) {
