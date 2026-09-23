@@ -138,48 +138,60 @@ export class RotatorService {
 
     public async restartAgy(): Promise<{ restarted: boolean; newPid?: number; error?: string }> {
         try {
-            // Check if systemd user service agy-remote-control is active
+            // Check if systemd user service agy-remote-control is installed
+            let hasSystemd = false;
             try {
-                const isActive = execSync('systemctl --user is-active agy-remote-control.service', {
-                    encoding: 'utf-8',
-                    timeout: 4000,
-                }).trim();
-                if (isActive === 'active') {
-                    this.log(`[AGY] Restarting via systemctl --user restart agy-remote-control.service...`);
-                    execSync('systemctl --user restart agy-remote-control.service', {
-                        encoding: 'utf-8',
-                        timeout: 10000,
-                    });
-                    await new Promise((r) => setTimeout(r, 2000));
-                    const newProc = this.findAgyProcess();
-                    this.log(`[AGY] Restarted via systemd (new PID ${newProc?.pid ?? 'unknown'})`);
-                    return { restarted: true, newPid: newProc?.pid };
-                }
+                execSync('systemctl --user status agy-remote-control.service', { stdio: 'ignore', timeout: 3000 });
+                hasSystemd = true;
             } catch (e: any) {
-                // systemd service not found or not active; proceed to standalone fallback
+                // Exit code 3 means loaded but inactive/dead, which still means systemd unit exists
+                if (e.status === 3 || e.status === 0) {
+                    hasSystemd = true;
+                }
             }
 
+            if (hasSystemd) {
+                this.log(`[AGY] Restarting via systemctl --user restart agy-remote-control.service (30s timeout)...`);
+                try {
+                    execSync('systemctl --user restart agy-remote-control.service', {
+                        encoding: 'utf-8',
+                        timeout: 30000,
+                    });
+                } catch (restartErr: any) {
+                    this.log(`[AGY] Graceful restart failed/timed out (${restartErr.message}). Performing forced clean restart...`);
+                    try { execSync('systemctl --user stop agy-remote-control.service', { timeout: 6000 }); } catch {}
+                    try { execSync('systemctl --user kill -s SIGKILL agy-remote-control.service', { timeout: 4000 }); } catch {}
+                    try { execSync('fuser -k 4400/tcp', { timeout: 3000 }); } catch {}
+                    await new Promise((r) => setTimeout(r, 1000));
+                    execSync('systemctl --user start agy-remote-control.service', { timeout: 15000 });
+                }
+
+                await new Promise((r) => setTimeout(r, 2000));
+                const newProc = this.findAgyProcess();
+                this.log(`[AGY] Restarted via systemd (PID ${newProc?.pid ?? 'unknown'})`);
+                return { restarted: true, newPid: newProc?.pid };
+            }
+
+            // Fallback ONLY when systemd is not present on the OS
+            this.log(`[AGY] Systemd not found. Using standalone process management.`);
             const current = this.findAgyProcess();
             const args = current?.args ?? this.getAgyArgs();
             this.saveAgyArgs(args);
 
+            // Clean port 4400 and existing process before starting
+            try { execSync('fuser -k 4400/tcp', { timeout: 3000 }); } catch {}
             if (current?.pid) {
-                this.log(`[AGY] Sending SIGTERM to PID ${current.pid}`);
                 try { process.kill(current.pid, 'SIGTERM'); } catch {}
-                for (let i = 0; i < 10; i++) {
-                    await new Promise((r) => setTimeout(r, 500));
-                    try { process.kill(current.pid, 0); } catch { break; }
-                }
             }
-
             await new Promise((r) => setTimeout(r, 1500));
-            this.log(`[AGY] Restarting: ${AGY_BINARY_PATH} ${args.join(' ')}`);
+
+            this.log(`[AGY] Spawning standalone: ${AGY_BINARY_PATH} ${args.join(' ')}`);
             const child = spawn(AGY_BINARY_PATH, args, { detached: true, stdio: 'ignore', env: process.env });
             child.unref();
 
             if (child.pid) {
                 fs.writeFileSync(AGY_PID_FILE, child.pid.toString(), 'utf-8');
-                this.log(`[AGY] Restarted (new PID ${child.pid})`);
+                this.log(`[AGY] Restarted standalone (new PID ${child.pid})`);
                 return { restarted: true, newPid: child.pid };
             }
             return { restarted: false, error: 'No PID returned' };
