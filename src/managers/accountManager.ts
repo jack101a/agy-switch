@@ -426,26 +426,41 @@ export class AccountManager {
       return { optimal: null, candidates: [] };
     }
 
+    const activeInfo = await this.getActiveAccount();
+    const activeId = activeInfo?.id;
+
     // Sort all candidates by Gemini priority:
-    // 1. Available accounts (5h > 0% AND weekly > 0%) come first, sorted by earliest weeklyExpiry
-    // 2. Exhausted accounts come after, sorted by earliest recovery time
+    // 1. Available accounts come first
+    // 2. Active account retains top priority if available (stickiness)
+    // 3. Highest weekly quota remaining (precious 7-day scarce resource)
+    // 4. Highest 5-hour quota remaining
+    // 5. Tie-breaker: earliest weekly expiry
+    // 6. Exhausted accounts sorted by earliest recovery time
     evaluated.sort((a, b) => {
       if (a.isAvailable && !b.isAvailable) return -1;
       if (!a.isAvailable && b.isAvailable) return 1;
 
       if (a.isAvailable && b.isAvailable) {
+        // Active account stickiness: keep active account at #1 if it has available quota
+        if (activeId) {
+          if (a.account.id === activeId) return -1;
+          if (b.account.id === activeId) return 1;
+        }
+
+        // Priority 1: Higher weekly percent remaining (scarce 7-day resource)
+        if (a.weeklyPercent !== b.weeklyPercent) {
+          return b.weeklyPercent - a.weeklyPercent;
+        }
+
+        // Priority 2: Higher 5-hour available percentage
+        if (a.hourlyPercent !== b.hourlyPercent) {
+          return b.hourlyPercent - a.hourlyPercent;
+        }
+
+        // Tie-breaker: earlier weekly reset if quotas are identical
         const timeA = a.weeklyExpiry ? new Date(a.weeklyExpiry).getTime() : Number.MAX_SAFE_INTEGER;
         const timeB = b.weeklyExpiry ? new Date(b.weeklyExpiry).getTime() : Number.MAX_SAFE_INTEGER;
-
-        if (timeA !== timeB) {
-          return timeA - timeB; // Earliest weekly expiry first
-        }
-        // Tie-breaker 1: lower weekly percent remaining (burn quota nearing reset)
-        if (a.weeklyPercent !== b.weeklyPercent) {
-          return a.weeklyPercent - b.weeklyPercent;
-        }
-        // Tie-breaker 2: higher hourly available percentage
-        return b.hourlyPercent - a.hourlyPercent;
+        return timeA - timeB;
       }
 
       // Both are exhausted: sort by earliest recovery time
