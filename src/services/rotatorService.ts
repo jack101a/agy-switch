@@ -9,6 +9,8 @@ import {
     DISCORD_WEBHOOK_URL,
     AGY_BINARY_PATH,
     AGY_PID_FILE,
+    AGY_SERVICE_NAME,
+    LEGACY_AGY_SERVICE_NAME,
 } from '../constants.js';
 
 // ---------------------------------------------------------------------------
@@ -110,12 +112,29 @@ export class RotatorService {
         } catch {}
     }
 
+    private getAgyServiceName(): string {
+        // Prefer official antigravity-cli-daemon.service; fall back to legacy agy-remote-control.service
+        try {
+            execSync(`systemctl --user status ${AGY_SERVICE_NAME}`, { stdio: 'ignore', timeout: 3000 });
+            return AGY_SERVICE_NAME;
+        } catch (e: any) {
+            if (e.status === 3 || e.status === 0) return AGY_SERVICE_NAME;
+        }
+        try {
+            execSync(`systemctl --user status ${LEGACY_AGY_SERVICE_NAME}`, { stdio: 'ignore', timeout: 3000 });
+            return LEGACY_AGY_SERVICE_NAME;
+        } catch (e: any) {
+            if (e.status === 3 || e.status === 0) return LEGACY_AGY_SERVICE_NAME;
+        }
+        return AGY_SERVICE_NAME;
+    }
+
     private getAgyArgs(): string[] {
         try {
             const p = `${DATA_DIR}/agy-args.json`;
             if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
         } catch {}
-        return ['--remote-control', '--hub-port', '4400', '--remote-control-name', 'homeserver-mini'];
+        return ['remote-control', 'serve'];
     }
 
     private saveAgyArgs(args: string[]): void {
@@ -124,7 +143,8 @@ export class RotatorService {
 
     private findAgyProcess(): { pid: number; args: string[] } | null {
         try {
-            const out = execSync(`ps aux | grep '[a]gy --remote-control'`, { encoding: 'utf-8', timeout: 5000 }).trim();
+            // Matches official daemon (agy remote-control serve) or legacy (agy --remote-control)
+            const out = execSync(`ps aux | grep -E '[a]gy remote-control serve|[a]gy --remote-control'`, { encoding: 'utf-8', timeout: 5000 }).trim();
             if (!out) return null;
             const line = out.split('\n')[0];
             const parts = line.trim().split(/\s+/);
@@ -138,10 +158,10 @@ export class RotatorService {
 
     public async restartAgy(): Promise<{ restarted: boolean; newPid?: number; error?: string }> {
         try {
-            // Check if systemd user service agy-remote-control is installed
+            const serviceName = this.getAgyServiceName();
             let hasSystemd = false;
             try {
-                execSync('systemctl --user status agy-remote-control.service', { stdio: 'ignore', timeout: 3000 });
+                execSync(`systemctl --user status ${serviceName}`, { stdio: 'ignore', timeout: 3000 });
                 hasSystemd = true;
             } catch (e: any) {
                 // Exit code 3 means loaded but inactive/dead, which still means systemd unit exists
@@ -151,19 +171,19 @@ export class RotatorService {
             }
 
             if (hasSystemd) {
-                this.log(`[AGY] Restarting via systemctl --user restart agy-remote-control.service (30s timeout)...`);
+                this.log(`[AGY] Restarting via systemctl --user restart ${serviceName} (30s timeout)...`);
                 try {
-                    execSync('systemctl --user restart agy-remote-control.service', {
+                    execSync(`systemctl --user restart ${serviceName}`, {
                         encoding: 'utf-8',
                         timeout: 30000,
                     });
                 } catch (restartErr: any) {
                     this.log(`[AGY] Graceful restart failed/timed out (${restartErr.message}). Performing forced clean restart...`);
-                    try { execSync('systemctl --user stop agy-remote-control.service', { timeout: 6000 }); } catch {}
-                    try { execSync('systemctl --user kill -s SIGKILL agy-remote-control.service', { timeout: 4000 }); } catch {}
+                    try { execSync(`systemctl --user stop ${serviceName}`, { timeout: 6000 }); } catch {}
+                    try { execSync(`systemctl --user kill -s SIGKILL ${serviceName}`, { timeout: 4000 }); } catch {}
                     try { execSync('fuser -k 4400/tcp', { timeout: 3000 }); } catch {}
                     await new Promise((r) => setTimeout(r, 1000));
-                    execSync('systemctl --user start agy-remote-control.service', { timeout: 15000 });
+                    execSync(`systemctl --user start ${serviceName}`, { timeout: 15000 });
                 }
 
                 await new Promise((r) => setTimeout(r, 2000));

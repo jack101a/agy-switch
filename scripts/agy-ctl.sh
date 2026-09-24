@@ -1,9 +1,14 @@
 #!/bin/bash
 # Antigravity Remote Control Daemon Controller
-# Connected to official systemd user service: agy-remote-control.service
+# Connected to official systemd user service: antigravity-cli-daemon.service
 
-SERVICE="agy-remote-control.service"
-LOG_FILE="$HOME/.antigravity/agy_daemon.log"
+# Auto-detect service: prefer official antigravity-cli-daemon.service; fallback to legacy
+SERVICE="antigravity-cli-daemon.service"
+if ! systemctl --user list-unit-files "$SERVICE" &>/dev/null; then
+  if systemctl --user list-unit-files "agy-remote-control.service" &>/dev/null; then
+    SERVICE="agy-remote-control.service"
+  fi
+fi
 
 show_help() {
     echo ""
@@ -44,16 +49,20 @@ case "$ACTION" in
       "$HOME/.local/bin/agy-auth" rotate --start
     fi
 
-    # Clean any stale orphan processes holding port 4400 before start
-    fuser -k 4400/tcp 2>/dev/null || true
-
     if systemctl --user is-active --quiet "$SERVICE"; then
       echo "Antigravity remote server is already running (ONLINE)."
       systemctl --user status "$SERVICE" --no-pager -l | head -n 8
     else
-      echo "Starting Antigravity remote server..."
-      systemctl --user start "$SERVICE"
-      sleep 2
+      echo "Starting Antigravity remote server ($SERVICE)..."
+      if systemctl --user list-unit-files "$SERVICE" &>/dev/null; then
+        systemctl --user start "$SERVICE"
+      elif [[ -x "$HOME/.local/bin/agy" ]]; then
+        "$HOME/.local/bin/agy" remote-control start --name "homeserver-mini"
+      elif command -v agy &>/dev/null; then
+        agy remote-control start --name "homeserver-mini"
+      fi
+
+      sleep 2.5
       if systemctl --user is-active --quiet "$SERVICE"; then
         echo "✓ Started successfully! Remote server is ONLINE ('homeserver-mini')."
       else
@@ -68,10 +77,11 @@ case "$ACTION" in
       "$HOME/.local/bin/agy-auth" rotate --stop
     fi
 
-    echo "Stopping Antigravity remote server..."
+    echo "Stopping Antigravity remote server ($SERVICE)..."
     systemctl --user stop "$SERVICE" 2>/dev/null || true
 
     # Sweep cleanup: guarantee zero orphan/rogue processes linger
+    pkill -f "agy remote-control" 2>/dev/null || true
     pkill -f "agy --remote-control" 2>/dev/null || true
     fuser -k 4400/tcp 2>/dev/null || true
     sleep 0.5
@@ -85,13 +95,8 @@ case "$ACTION" in
       "$HOME/.local/bin/agy-auth" rotate --start
     fi
 
-    echo "Restarting Antigravity remote server..."
-    systemctl --user stop "$SERVICE" 2>/dev/null || true
-    pkill -f "agy --remote-control" 2>/dev/null || true
-    fuser -k 4400/tcp 2>/dev/null || true
-    sleep 1
-
-    systemctl --user start "$SERVICE"
+    echo "Restarting Antigravity remote server ($SERVICE)..."
+    systemctl --user restart "$SERVICE"
     sleep 2.5
     if systemctl --user is-active --quiet "$SERVICE"; then
       echo "✓ Restarted successfully! Remote server is ONLINE ('homeserver-mini')."
@@ -105,16 +110,13 @@ case "$ACTION" in
     if [[ -x "$HOME/.local/bin/agy-auth" ]]; then
       "$HOME/.local/bin/agy-auth" rotate --status
     fi
-    systemctl --user status "$SERVICE" --no-pager -l
 
     echo ""
-    echo "--- Port 4400 & Active Process Check ---"
-    PORT_PID=$(lsof -t -i:4400 2>/dev/null || ss -tulpn 2>/dev/null | grep ':4400 ' | awk -F'pid=' '{print $2}' | awk -F',' '{print $1}')
-    if [[ -n "$PORT_PID" ]]; then
-      echo "Port 4400 is held by PID: $PORT_PID"
-      ps -fp "$PORT_PID" 2>/dev/null || true
+    echo "--- Official Remote Control Status ---"
+    if [[ -x "$HOME/.local/bin/agy" ]]; then
+      "$HOME/.local/bin/agy" remote-control status 2>/dev/null || systemctl --user status "$SERVICE" --no-pager -l
     else
-      echo "Port 4400 is FREE (no process listening)."
+      systemctl --user status "$SERVICE" --no-pager -l
     fi
 
     echo ""
@@ -124,21 +126,13 @@ case "$ACTION" in
     fi
 
     echo ""
-    echo "--- Recent Daemon Output ($LOG_FILE) ---"
-    if [[ -f "$LOG_FILE" ]]; then
-      tail -n 15 "$LOG_FILE"
-    else
-      echo "Log file not found."
-    fi
+    echo "--- Recent Daemon Output (journalctl) ---"
+    journalctl --user -u "$SERVICE" -n 15 --no-pager 2>/dev/null || true
     ;;
 
   logs)
-    if [[ -f "$LOG_FILE" ]]; then
-      echo "Streaming logs from $LOG_FILE (Press Ctrl+C to stop)..."
-      tail -f -n 30 "$LOG_FILE"
-    else
-      journalctl --user -u "$SERVICE" -f
-    fi
+    echo "Streaming logs for $SERVICE (Press Ctrl+C to stop)..."
+    journalctl --user -u "$SERVICE" -f
     ;;
 
   help|--help|-h)
