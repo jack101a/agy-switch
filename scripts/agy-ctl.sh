@@ -44,10 +44,7 @@ esac
 
 case "$ACTION" in
   on|start)
-    if [[ -x "$HOME/.local/bin/agy-auth" ]]; then
-      "$HOME/.local/bin/agy-auth" select-best
-      "$HOME/.local/bin/agy-auth" rotate --start
-    fi
+    # Manual mode: start with whichever account was selected, without algorithm override
 
     if systemctl --user is-active --quiet "$SERVICE"; then
       echo "Antigravity remote server is already running (ONLINE)."
