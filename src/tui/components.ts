@@ -200,38 +200,151 @@ export function getEffectiveWeeklyExpiry(iso?: string | null, fallbackAnchorMs?:
     return d.toISOString();
 }
 
-// ─── Priority Models ───────────────────────────────────────────────────────────
+// ─── Model Families & Dynamic Selection ──────────────────────────────────────
 export const PRIORITY_MODELS: Record<string, string> = {
-    'claude-sonnet-4-6': 'Claude Sonnet 4.6',
-    'claude-opus-4-6-thinking': 'Claude Opus 4.6',
-    'gemini-3.7-flash-high': 'Gemini 3.7 Flash',
-    'gemini-3.1-pro-high': 'Gemini 3.1 Pro',
-    'gpt-oss-120b-medium': 'GPT-OSS 120B',
+    'claude-sonnet': 'Claude Sonnet',
+    'claude-opus': 'Claude Opus',
+    'gemini-flash': 'Gemini Flash',
+    'gemini-pro': 'Gemini Pro',
+    'gpt-oss': 'GPT-OSS 120B',
 };
 
-export function getTopModels(quota: AccountQuota['quota'] | undefined, maxCount: number = 3) {
-    if (!quota?.models?.length) return [];
-    
-    const matched: Array<{ modelId: string; displayName: string; usedPercent: number; resetAt: string | null }> = [];
-    
-    for (const [key, cleanName] of Object.entries(PRIORITY_MODELS)) {
-        const found = quota.models.find(m => m.modelId === key || m.modelId.includes(key));
-        if (found) {
-            matched.push({
-                ...found,
-                displayName: cleanName,
-            });
+export function parseModelInfo(modelId: string): {
+    family: string;
+    familyOrder: number;
+    version: number;
+    subTierScore: number;
+    displayName: string;
+} | null {
+    const id = modelId.toLowerCase();
+    // Exclude internal preview/tab/chat buckets
+    if (id.startsWith('chat_') || id.startsWith('tab_')) return null;
+
+    let family = '';
+    let familyOrder = 99;
+
+    if (id.includes('claude') && id.includes('sonnet')) {
+        family = 'claude-sonnet';
+        familyOrder = 1;
+    } else if (id.includes('claude') && id.includes('opus')) {
+        family = 'claude-opus';
+        familyOrder = 2;
+    } else if (
+        id.includes('gemini') &&
+        id.includes('flash') &&
+        !id.includes('lite') &&
+        !id.includes('thinking') &&
+        !id.includes('agent') &&
+        !id.includes('image')
+    ) {
+        family = 'gemini-flash';
+        familyOrder = 3;
+    } else if (id.includes('gemini') && id.includes('pro') && !id.includes('agent')) {
+        family = 'gemini-pro';
+        familyOrder = 4;
+    } else if (id.includes('gpt-oss') || id.includes('gpt_oss')) {
+        family = 'gpt-oss';
+        familyOrder = 5;
+    } else {
+        family = id;
+        familyOrder = 10;
+    }
+
+    // Extract version numbers like 5-5, 4-6, 3.8, 3.7, 3.1, 2.5
+    let version = 0;
+    let versionStr = '';
+    const vMatch = id.match(/(\d+)(?:[.-](\d+))?/);
+    if (vMatch) {
+        if (vMatch[2] !== undefined) {
+            versionStr = `${vMatch[1]}.${vMatch[2]}`;
+            version = parseFloat(versionStr);
+        } else {
+            versionStr = vMatch[1];
+            version = parseFloat(versionStr);
         }
     }
 
-    if (matched.length >= maxCount) return matched.slice(0, maxCount);
+    // Preference within same version: high > thinking > medium > low > tiered
+    let subTierScore = 0;
+    if (id.includes('high')) subTierScore = 4;
+    else if (id.includes('thinking')) subTierScore = 3;
+    else if (id.includes('medium')) subTierScore = 2;
+    else if (id.includes('low')) subTierScore = 1;
+    else if (id.includes('tiered')) subTierScore = 0;
+
+    let displayName = '';
+    if (family === 'claude-sonnet') {
+        displayName = versionStr ? `Claude Sonnet ${versionStr}` : 'Claude Sonnet';
+    } else if (family === 'claude-opus') {
+        displayName = versionStr ? `Claude Opus ${versionStr}` : 'Claude Opus';
+    } else if (family === 'gemini-flash') {
+        displayName = versionStr ? `Gemini ${versionStr} Flash` : 'Gemini Flash';
+    } else if (family === 'gemini-pro') {
+        displayName = versionStr ? `Gemini ${versionStr} Pro` : 'Gemini Pro';
+    } else if (family === 'gpt-oss') {
+        displayName = 'GPT-OSS 120B';
+    } else {
+        displayName = modelId
+            .split('-')
+            .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(' ');
+    }
+
+    return { family, familyOrder, version, subTierScore, displayName };
+}
+
+export function getTopModels(quota: AccountQuota['quota'] | undefined, maxCount: number = 5) {
+    if (!quota?.models?.length) return [];
+
+    const familyMap = new Map<
+        string,
+        {
+            modelId: string;
+            displayName: string;
+            usedPercent: number;
+            resetAt: string | null;
+            family: string;
+            familyOrder: number;
+            version: number;
+            subTierScore: number;
+        }
+    >();
 
     for (const m of quota.models) {
-        if (!matched.some(x => x.modelId === m.modelId)) {
-            matched.push(m);
+        const parsed = parseModelInfo(m.modelId);
+        if (!parsed) continue;
+
+        const current = familyMap.get(parsed.family);
+        if (!current) {
+            familyMap.set(parsed.family, {
+                modelId: m.modelId,
+                displayName: parsed.displayName,
+                usedPercent: m.usedPercent,
+                resetAt: m.resetAt,
+                ...parsed,
+            });
+        } else {
+            // Compare version first; if tied, compare subTierScore
+            if (
+                parsed.version > current.version ||
+                (parsed.version === current.version && parsed.subTierScore > current.subTierScore)
+            ) {
+                familyMap.set(parsed.family, {
+                    modelId: m.modelId,
+                    displayName: parsed.displayName,
+                    usedPercent: m.usedPercent,
+                    resetAt: m.resetAt,
+                    ...parsed,
+                });
+            }
         }
-        if (matched.length >= maxCount) break;
     }
 
-    return matched;
+    const sorted = Array.from(familyMap.values()).sort((a, b) => a.familyOrder - b.familyOrder);
+    return sorted.slice(0, maxCount).map(({ modelId, displayName, usedPercent, resetAt }) => ({
+        modelId,
+        displayName,
+        usedPercent,
+        resetAt,
+    }));
 }

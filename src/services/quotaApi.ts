@@ -229,10 +229,23 @@ export class QuotaApiService {
     }
 
     private humanizeModelId(id: string): string {
-        return id
-            .split('-')
-            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
+        const parts = id.split('-');
+        const result: string[] = [];
+        for (let i = 0; i < parts.length; i++) {
+            const part = parts[i];
+            const next = parts[i + 1];
+            if (/^\d+$/.test(part) && next && /^\d+$/.test(next)) {
+                result.push(`${part}.${next}`);
+                i++;
+                continue;
+            }
+            if (['high', 'medium', 'low', 'thinking', 'tiered'].includes(part.toLowerCase())) {
+                result.push(`(${part.charAt(0).toUpperCase() + part.slice(1)})`);
+            } else {
+                result.push(part.charAt(0).toUpperCase() + part.slice(1));
+            }
+        }
+        return result.join(' ');
     }
 
     private async postJson(url: string, body: object, accessToken: string): Promise<any> {

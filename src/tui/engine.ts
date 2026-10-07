@@ -104,12 +104,15 @@ export class TUIEngine {
             const cached = cache.get(acc.id);
             const quota = cached?.quota;
             const tier = quota?.tierName || 'Standard';
-            const models = getTopModels(quota, isMobile ? 2 : 3);
+            const models = getTopModels(quota, isMobile ? 2 : 5);
             const quickKey = idx < 9 ? `${idx + 1}` : '';
             const hourlyPct = quota?.geminiHourlyPercent ?? acc.hourlyPercent ?? 100;
             const hourlyReset = quota?.geminiHourlyReset;
             const weeklyPct = quota?.weeklyPercent ?? acc.weeklyPercent ?? 100;
             const weeklyIso = this.accountManager.getEffectiveWeeklyExpiryForAccount(acc);
+            const claudeHourlyPct = quota?.claudeHourlyPercent ?? acc.claudeHourlyPercent;
+            const claudeHourlyReset = quota?.claudeHourlyReset;
+            const hasClaudeHourly = typeof claudeHourlyPct === 'number';
 
             if (isMobile) {
                 const cardBorder = isActive ? C.brightGreen : (isCursor ? C.brightCyan : C.gray);
@@ -140,6 +143,11 @@ export class TUIEngine {
                 const mobileWBar = makeProgressBar(100 - weeklyPct, Math.max(5, Math.floor(width * 0.15)));
                 add(`  ${C.bold}Gemini 5-Hour:${C.reset} ${mobileHBar} ${C.gray}↳ ${hourlyResetStrMobile}${C.reset}`);
                 add(`  ${C.bold}Gemini Weekly:${C.reset} ${mobileWBar} ${C.gray}↳ ${weeklyResetStrMobile}${C.reset}`);
+                if (hasClaudeHourly) {
+                    const mobileCBar = makeProgressBar(100 - claudeHourlyPct, Math.max(5, Math.floor(width * 0.15)));
+                    const claudeResetStrMobile = claudeHourlyReset ? formatResetCountdown(claudeHourlyReset, true) : `${C.gray}active${C.reset}`;
+                    add(`  ${C.bold}Claude 5-Hour:${C.reset} ${mobileCBar} ${C.gray}↳ ${claudeResetStrMobile}${C.reset}`);
+                }
                 add(`  ${C.gray}┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${C.reset}`);
 
                 if (models.length > 0) {
@@ -187,12 +195,20 @@ export class TUIEngine {
                 const summaryRow2 = `   ${C.bold}Gemini Weekly:${C.reset}  ${weeklyBar}   ${C.gray}Resets: ${weeklyResetStr}${C.reset}`;
                 add(`${cardColor}│${C.reset}${padRight(summaryRow1, width - 2)}${cardColor}│${C.reset}`);
                 add(`${cardColor}│${C.reset}${padRight(summaryRow2, width - 2)}${cardColor}│${C.reset}`);
+
+                if (hasClaudeHourly) {
+                    const claudeBar = makeProgressBar(100 - claudeHourlyPct, barWidth);
+                    const claudeResetStr = claudeHourlyReset ? formatResetCountdown(claudeHourlyReset, isCompactDates) : `${C.gray}active${C.reset}`;
+                    const summaryRow3 = `   ${C.bold}Claude 5-Hour:${C.reset}  ${claudeBar}   ${C.gray}Resets: ${claudeResetStr}${C.reset}`;
+                    add(`${cardColor}│${C.reset}${padRight(summaryRow3, width - 2)}${cardColor}│${C.reset}`);
+                }
+
                 add(`${cardColor}├${'┄'.repeat(width - 2)}┤${C.reset}`);
 
                 if (models.length > 0) {
                     for (const m of models) {
                         const barStr = makeProgressBar(m.usedPercent, 12);
-                        const countdownStr = formatResetCountdown(m.resetAt, false);
+                        const countdownStr = formatResetCountdown(m.resetAt, isCompactDates);
                         const nameStr = m.displayName.padEnd(20);
 
                         const modelRow = `   ${C.white}${nameStr}${C.reset} ${barStr}   ${C.gray}Resets: ${countdownStr}`;

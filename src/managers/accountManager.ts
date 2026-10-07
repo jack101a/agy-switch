@@ -333,6 +333,10 @@ export class AccountManager {
       account.hourlyPercent = quota.geminiHourlyPercent;
       changed = true;
     }
+    if (typeof quota.claudeHourlyPercent === 'number' && account.claudeHourlyPercent !== quota.claudeHourlyPercent) {
+      account.claudeHourlyPercent = quota.claudeHourlyPercent;
+      changed = true;
+    }
 
     if (changed) {
       const idx = this.accounts.findIndex((a) => a.id === account.id);

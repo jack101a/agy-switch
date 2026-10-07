@@ -10,6 +10,7 @@ export interface StoredAccount {
     weeklyExpiry?: string | null;
     weeklyPercent?: number;
     hourlyPercent?: number;
+    claudeHourlyPercent?: number;
 }
 
 export interface ActiveAccount {
